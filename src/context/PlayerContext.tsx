@@ -165,7 +165,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !currentTrack.audioUrl) {
-      setPlaybackError("This track has no playable audio yet. Import a local file to keep listening.");
+      setPlaybackError(currentTrack.source === "spotify"
+        ? "Spotify metadata is connected, but playback stays in Spotify or a local file. This app does not stream Spotify audio."
+        : "This track has no playable audio yet. Import a local file to keep listening.");
       return;
     }
     if (isPlaying) {
