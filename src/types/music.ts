@@ -1,4 +1,4 @@
-export type TrackSource = "catalog" | "local";
+export type TrackSource = "catalog" | "local" | "spotify";
 
 export type Track = {
   id: string;
