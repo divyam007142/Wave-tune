@@ -1,4 +1,4 @@
-export type TrackSource = "catalog" | "local" | "spotify";
+export type TrackSource = "local" | "spotify";
 
 export type Track = {
   id: string;
@@ -9,6 +9,7 @@ export type Track = {
   artwork: string;
   accent: string;
   audioUrl?: string;
+  youtubeVideoId?: string;
   source: TrackSource;
   addedAt?: number;
 };
