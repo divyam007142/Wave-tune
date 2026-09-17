@@ -8,13 +8,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { catalogTracks } from "../data/catalog";
 import { clearLocalTracks, loadLocalTracks, readStored, saveLocalTrack, writeStored } from "../services/storage";
+import { youtubePlaybackProvider } from "../services/youtube";
 import type { Track } from "../types/music";
 
 type RepeatMode = "off" | "all" | "one";
 type PlayerContextValue = {
-  currentTrack: Track;
+  currentTrack: Track | null;
   isPlaying: boolean;
   isLoading: boolean;
   currentTime: number;
@@ -52,20 +52,20 @@ function formatImportedName(name: string) {
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [library, setLibrary] = useState<Track[]>([]);
-  const [currentTrack, setCurrentTrack] = useState<Track>(catalogTracks[0]);
-  const [queue, setQueue] = useState<Track[]>(catalogTracks.slice(1, 5));
+  const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
+  const [queue, setQueue] = useState<Track[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(catalogTracks[0].duration);
+  const [duration, setDuration] = useState(0);
   const [volume, setVolumeState] = useState(() => readStored("volume", 0.72));
-  const [likedIds, setLikedIds] = useState<string[]>(() => readStored("liked", ["solace"]));
-  const [recentlyPlayed, setRecentlyPlayed] = useState<string[]>(() => readStored("recent", ["night-drive", "solace", "open-water"]));
+  const [likedIds, setLikedIds] = useState<string[]>(() => readStored("liked", []));
+  const [recentlyPlayed, setRecentlyPlayed] = useState<string[]>(() => readStored("recent", []));
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState<RepeatMode>("all");
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const playContextRef = useRef<Track[]>(catalogTracks);
+  const playContextRef = useRef<Track[]>([]);
   const repeatRef = useRef<RepeatMode>("all");
   const nextRef = useRef<() => void>(() => undefined);
   repeatRef.current = repeat;
@@ -78,7 +78,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     audioRef.current = audio;
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
     const onLoaded = () => {
-      setDuration(Number.isFinite(audio.duration) ? audio.duration : currentTrack.duration);
+      setDuration(Number.isFinite(audio.duration) ? audio.duration : currentTrack?.duration ?? 0);
       setIsLoading(false);
     };
     const onWaiting = () => setIsLoading(true);
@@ -90,8 +90,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const onError = () => {
       setIsLoading(false);
       setIsPlaying(false);
-      setPlaybackError("Couldn't load this song. Try another track or import a local file.");
-      console.warn("Wave Tune playback error", audio.error);
+      setPlaybackError("Couldn't load this song. Try another track.");
     };
     const onEnded = () => {
       if (repeatRef.current === "one") {
@@ -132,27 +131,71 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    audio.src = currentTrack.audioUrl ?? "";
-    audio.load();
-    setCurrentTime(0);
-    setDuration(currentTrack.duration);
-    setPlaybackError(null);
-    if (isPlaying) {
-      setIsLoading(true);
-      void audio.play().catch(() => {
-        setIsPlaying(false);
-        setPlaybackError("Playback needs a tap to start in this browser.");
-      });
+    if (!currentTrack) {
+      audio.removeAttribute("src");
+      audio.load();
+      setCurrentTime(0);
+      setDuration(0);
+      return;
     }
-  }, [currentTrack]);
+
+    const requestedTrack = currentTrack;
+    let cancelled = false;
+    setCurrentTime(0);
+    setDuration(requestedTrack.duration);
+    setPlaybackError(null);
+
+    const loadAudio = async () => {
+      let audioUrl = requestedTrack.audioUrl;
+      if (!audioUrl && requestedTrack.source === "spotify") {
+        setIsLoading(true);
+        try {
+          const playback = await youtubePlaybackProvider.resolveTrack(requestedTrack);
+          if (cancelled) return;
+          audioUrl = playback.audioUrl;
+          setCurrentTrack({ ...requestedTrack, ...playback });
+          return;
+        } catch (error) {
+          if (!cancelled) {
+            setIsLoading(false);
+            setIsPlaying(false);
+            setPlaybackError(error instanceof Error ? error.message : "No playable YouTube result was found.");
+          }
+          return;
+        }
+      }
+
+      if (cancelled) return;
+      if (!audioUrl) {
+        setIsLoading(false);
+        setIsPlaying(false);
+        setPlaybackError("This track has no playable audio.");
+        return;
+      }
+      audio.src = audioUrl;
+      audio.load();
+      if (isPlaying) {
+        setIsLoading(true);
+        void audio.play().catch(() => {
+          if (!cancelled) {
+            setIsPlaying(false);
+            setIsLoading(false);
+            setPlaybackError("Playback needs a tap to start in this browser.");
+          }
+        });
+      }
+    };
+
+    void loadAudio();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentTrack, isPlaying]);
 
   const playTrack = useCallback((track: Track, context?: Track[]) => {
-    playContextRef.current = context?.length ? context : [...catalogTracks, ...library];
+    playContextRef.current = context?.length ? context : [...library, track];
     setCurrentTrack(track);
-    setQueue((existing) => {
-      const nextQueue = context?.length ? context.filter((item) => item.id !== track.id) : existing;
-      return nextQueue;
-    });
+    setQueue((existing) => (context?.length ? context.filter((item) => item.id !== track.id) : existing));
     setIsPlaying(true);
     setPlaybackError(null);
     setRecentlyPlayed((existing) => {
@@ -164,10 +207,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio || !currentTrack.audioUrl) {
-      setPlaybackError(currentTrack.source === "spotify"
-        ? "Spotify metadata is connected, but playback stays in Spotify or a local file. This app does not stream Spotify audio."
-        : "This track has no playable audio yet. Import a local file to keep listening.");
+    if (!audio || !currentTrack) {
+      setPlaybackError("Connect Spotify and choose a track to start listening.");
       return;
     }
     if (isPlaying) {
@@ -181,19 +222,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setPlaybackError("Playback needs a tap to start in this browser.");
       });
     }
-  }, [currentTrack.audioUrl, isPlaying]);
+  }, [currentTrack, isPlaying]);
 
   const next = useCallback(() => {
+    if (!currentTrack) return;
     const available = queue.length ? queue : playContextRef.current.filter((track) => track.id !== currentTrack.id);
     if (!available.length) return;
     const index = shuffle ? Math.floor(Math.random() * available.length) : 0;
     const nextTrack = available[index];
     setQueue((items) => items.filter((track) => track.id !== nextTrack.id));
     playTrack(nextTrack, playContextRef.current);
-  }, [currentTrack.id, playContextRef, playTrack, queue, shuffle]);
+  }, [currentTrack, playTrack, queue, shuffle]);
   nextRef.current = next;
 
   const previous = useCallback(() => {
+    if (!currentTrack) return;
     if (currentTime > 4) {
       seek(0);
       return;
@@ -202,7 +245,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const index = context.findIndex((track) => track.id === currentTrack.id);
     const previousTrack = context[(index - 1 + context.length) % context.length];
     if (previousTrack) playTrack(previousTrack, context);
-  }, [currentTime, currentTrack.id, playTrack]);
+  }, [currentTime, currentTrack, playTrack]);
 
   const seek = useCallback((value: number) => {
     if (audioRef.current) audioRef.current.currentTime = value;
