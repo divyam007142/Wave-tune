@@ -9,10 +9,14 @@ const stateKey = "wave-tune:spotify-state";
 const scopes = [
   "user-read-private",
   "user-read-email",
+  "user-library-read",
   "playlist-read-private",
   "playlist-read-collaborative",
   "user-read-recently-played",
   "user-top-read",
+  "user-follow-read",
+  "user-read-currently-playing",
+  "user-read-playback-state",
 ].join(" ");
 
 type SpotifyImage = { url: string; width?: number; height?: number };
@@ -32,6 +36,9 @@ type SpotifyPlaylistResponse = {
   description?: string | null;
   images?: SpotifyImage[];
   tracks?: { total?: number };
+};
+type SpotifyPlaylistTrackResponse = {
+  items?: { track?: SpotifyApiTrack | null }[];
 };
 type SpotifyUser = {
   id: string;
@@ -53,7 +60,9 @@ export type SpotifyProfile = {
 export type SpotifySnapshot = {
   profile: SpotifyProfile;
   tracks: Track[];
+  recentTracks: Track[];
   playlists: Playlist[];
+  likedTracks: Track[];
 };
 
 function imageFrom(images?: SpotifyImage[]) {
@@ -84,6 +93,14 @@ function toPlaylist(playlist: SpotifyPlaylistResponse): Playlist {
     accent: "#c6a8ee",
     trackIds: [],
   };
+}
+
+async function playlistTracks(playlistId: string) {
+  const data = await api<SpotifyPlaylistTrackResponse>(`/playlists/${playlistId}/tracks?limit=50`);
+  return (data.items ?? [])
+    .map((item) => item.track)
+    .filter((track): track is SpotifyApiTrack => Boolean(track?.id && track.name && track.album))
+    .map(toTrack);
 }
 
 function randomString(length = 64) {
@@ -180,15 +197,23 @@ export const spotifyService = {
   },
 
   async loadSnapshot(): Promise<SpotifySnapshot> {
-    const [user, recent, top, playlistResponse] = await Promise.all([
+    const [user, recent, top, playlistResponse, savedTracks] = await Promise.all([
       api<SpotifyUser>("/me"),
       api<{ items: { track: SpotifyApiTrack }[] }>("/me/player/recently-played?limit=8"),
       api<{ items: SpotifyApiTrack[] }>("/me/top/tracks?limit=8&time_range=medium_term"),
       api<{ items: SpotifyPlaylistResponse[] }>("/me/playlists?limit=8"),
+      api<{ items: { track: SpotifyApiTrack }[] }>("/me/tracks?limit=50"),
     ]);
+    const recentTracks = recent.items.map((item) => item.track).map(toTrack);
     const tracks = [...recent.items.map((item) => item.track), ...top.items]
       .filter((track, index, list) => list.findIndex((item) => item.id === track.id) === index)
       .map(toTrack);
+    const playlists = await Promise.all(
+      playlistResponse.items.map(async (playlist) => ({
+        ...toPlaylist(playlist),
+        tracks: await playlistTracks(playlist.id),
+      })),
+    );
     return {
       profile: {
         id: user.id,
@@ -198,13 +223,15 @@ export const spotifyService = {
         product: user.product,
       },
       tracks,
-      playlists: playlistResponse.items.map(toPlaylist),
+      recentTracks,
+      playlists,
+      likedTracks: savedTracks.items.map((item) => item.track).filter(Boolean).map(toTrack),
     };
   },
 
   async search(query: string): Promise<SearchResult> {
-    const data = await api<{ tracks?: { items: SpotifyApiTrack[] }; albums?: { items: SpotifyAlbum[] }; artists?: { items: (SpotifyArtist & { images?: SpotifyImage[] })[] } }>(
-      `/search?q=${encodeURIComponent(query)}&type=track,album,artist&limit=20`,
+    const data = await api<{ tracks?: { items: SpotifyApiTrack[] }; albums?: { items: SpotifyAlbum[] }; artists?: { items: (SpotifyArtist & { images?: SpotifyImage[] })[] }; playlists?: { items: SpotifyPlaylistResponse[] } }>(
+      `/search?q=${encodeURIComponent(query)}&type=track,album,artist,playlist&limit=20`,
     );
     const tracks = (data.tracks?.items ?? []).map(toTrack);
     return {
@@ -220,7 +247,7 @@ export const spotifyService = {
         name: artist.name,
         artwork: imageFrom(artist.images),
       })),
-      playlists: [],
+      playlists: (data.playlists?.items ?? []).map(toPlaylist),
     };
   },
 };
