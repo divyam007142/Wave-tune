@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: wave-tune
+    runtime: node
+    rootDir: Wave-tune
+    buildCommand: npm ci && npm run build
+    startCommand: npm run preview
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: FRONTEND_ORIGIN
+        sync: false
