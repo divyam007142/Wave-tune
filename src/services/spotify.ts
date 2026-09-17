@@ -21,7 +21,7 @@ const scopes = [
 
 type SpotifyImage = { url: string; width?: number; height?: number };
 type SpotifyArtist = { id: string; name: string };
-type SpotifyAlbum = { id: string; name: string; images?: SpotifyImage[] };
+type SpotifyAlbum = { id: string; name: string; images?: SpotifyImage[]; artists?: SpotifyArtist[] };
 type SpotifyApiTrack = {
   id: string;
   name: string;
@@ -79,8 +79,8 @@ function toTrack(track: SpotifyApiTrack): Track {
     artwork: imageFrom(track.album.images),
     accent: "#b58be8",
     source: "spotify",
-    // Spotify preview URLs are not guaranteed and are intentionally not used
-    // as a playback bypass. Premium playback belongs in Spotify Connect.
+    // Spotify supplies metadata only. Audio playback is resolved by the
+    // separate YouTube provider when the user presses play.
   };
 }
 
@@ -96,7 +96,7 @@ function toPlaylist(playlist: SpotifyPlaylistResponse): Playlist {
 }
 
 async function playlistTracks(playlistId: string) {
-  const data = await api<SpotifyPlaylistTrackResponse>(`/playlists/${playlistId}/tracks?limit=50`);
+  const data = await api<SpotifyPlaylistTrackResponse>(`/playlists/${playlistId}/items?limit=100`);
   return (data.items ?? [])
     .map((item) => item.track)
     .filter((track): track is SpotifyApiTrack => Boolean(track?.id && track.name && track.album))
@@ -239,7 +239,7 @@ export const spotifyService = {
       albums: (data.albums?.items ?? []).map((album) => ({
         id: `spotify-album-${album.id}`,
         name: album.name,
-        artist: "Spotify album",
+        artist: album.artists?.map((artist) => artist.name).join(", ") || "Unknown artist",
         artwork: imageFrom(album.images),
       })),
       artists: (data.artists?.items ?? []).map((artist) => ({
