@@ -20,6 +20,7 @@ export type Playlist = {
   artwork: string;
   accent: string;
   trackIds: string[];
+  tracks?: Track[];
 };
 
 export type SearchResult = {
