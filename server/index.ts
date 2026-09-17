@@ -61,7 +61,7 @@ app.get("/api/youtube/stream", async (request, response) => {
 
 if (process.env.NODE_ENV === "production") {
   app.use(express.static("dist"));
-  app.get("*", (_request, response) => response.sendFile("dist/index.html", { root: process.cwd() }));
+  app.get("/*splat", (_request, response) => response.sendFile("dist/index.html", { root: process.cwd() }));
   app.listen(port, "0.0.0.0", () => console.log(`Wave Tune server listening on ${port}`));
 } else {
   const vite = await createViteServer({
