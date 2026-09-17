@@ -10,11 +10,17 @@ export type YouTubeSearchResult = {
 
 type YouTubeSearchResponse = { results?: YouTubeSearchResult[] };
 
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL?.trim() ?? "").replace(/\/+$/, "");
+
+function apiUrl(path: string) {
+  return `${apiBaseUrl}${path}`;
+}
+
 export class YouTubePlaybackProvider {
   private readonly cache = new Map<string, YouTubeSearchResult>();
 
   async search(query: string): Promise<YouTubeSearchResult[]> {
-    const response = await fetch(`/api/youtube/search?q=${encodeURIComponent(query)}`);
+    const response = await fetch(apiUrl(`/api/youtube/search?q=${encodeURIComponent(query)}`));
     if (!response.ok) throw new Error(`YouTube search failed with ${response.status}`);
     const data = (await response.json()) as YouTubeSearchResponse;
     return data.results ?? [];
@@ -26,7 +32,7 @@ export class YouTubePlaybackProvider {
     if (!result) throw new Error(`No playable YouTube result found for ${track.title}.`);
     this.cache.set(track.id, result);
     return {
-      audioUrl: `/api/youtube/stream?videoId=${encodeURIComponent(result.id)}`,
+      audioUrl: apiUrl(`/api/youtube/stream?videoId=${encodeURIComponent(result.id)}`),
       youtubeVideoId: result.id,
     };
   }
