@@ -212,3 +212,107 @@ body { background: linear-gradient(135deg, #dce8f8 0%, #e8e2f4 48%, #f4dfe8 100%
 @media (max-width: 760px) {
   body { background: linear-gradient(135deg, #dce8f8, #f0e3f2 55%, #f4dfe8); }.app-shell { width: 100%; height: auto; min-height: 100svh; margin: 0; display: block; border: 0; border-radius: 0; box-shadow: none; background: transparent; }.reference-home { padding-top: 8px; }.reference-release-layout { grid-template-columns: 112px minmax(0, 1fr); gap: 12px; }.reference-featured-cover { height: 111px; }.reference-track-row { min-height: 32px; grid-template-columns: 19px minmax(0, 1fr) 16px 28px; }.reference-track-more { display: none; }.reference-track-duration { grid-column: 4; }.reference-recent-section .card-row { grid-template-columns: repeat(5, 128px); overflow-x: auto; padding-bottom: 7px; }.reference-activity-rail { display: none; }.desktop-player { display: none; }.sidebar-top .reference-brand { display: none; }
 }
+
+/* Full-viewport workspace and interaction polish */
+@media (min-width: 761px) {
+  .app-shell {
+    width: 100%;
+    height: 100dvh;
+    min-height: 100dvh;
+    margin: 0;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+  .main-column, .reference-activity-rail { min-height: 100dvh; }
+}
+
+.icon-button,
+.nav-item,
+.sidebar-playlist,
+.toolbar-search,
+.toolbar-profile,
+.primary-button,
+.secondary-button,
+.main-play,
+.playlist-card,
+.search-suggestions button,
+.back-button,
+.full-secondary > button,
+.danger-button,
+.mobile-nav button {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), color .2s ease, background-color .2s ease, border-color .2s ease, box-shadow .2s ease, opacity .2s ease;
+}
+
+.icon-button:hover,
+.nav-item:hover,
+.sidebar-playlist:hover,
+.toolbar-search:hover,
+.toolbar-profile:hover,
+.secondary-button:hover,
+.playlist-card:hover,
+.search-suggestions button:hover {
+  transform: translateY(-1px);
+}
+
+.icon-button:active,
+.nav-item:active,
+.sidebar-playlist:active,
+.primary-button:active,
+.secondary-button:active,
+.main-play:active,
+.playlist-card:active,
+.search-suggestions button:active {
+  transform: translateY(1px) scale(.98);
+}
+
+.primary-button:focus-visible,
+.secondary-button:focus-visible,
+.main-play:focus-visible,
+.playlist-card:focus-visible,
+.toolbar-profile:focus-visible,
+.toolbar-search:focus-visible {
+  outline: 2px solid rgba(143, 118, 216, .65);
+  outline-offset: 3px;
+}
+
+.reference-featured-cover,
+.reference-recent-section .card-art-wrap,
+.playlist-card,
+.search-input-wrap,
+.settings-group,
+.desktop-player {
+  transition: box-shadow .28s ease, border-color .28s ease, background-color .28s ease, transform .28s cubic-bezier(.22, 1, .36, 1);
+}
+
+.reference-featured-cover:hover {
+  box-shadow: 0 15px 34px rgba(92, 79, 135, .2);
+}
+
+.reference-recent-section .track-card:hover .card-art-wrap {
+  box-shadow: 0 9px 20px rgba(98, 85, 137, .2);
+}
+
+.playing-bars i,
+.eq-mark i,
+.friend-eq i {
+  animation: equalizer .85s ease-in-out infinite alternate;
+  transform-origin: center bottom;
+}
+.playing-bars i:nth-child(2),
+.eq-mark i:nth-child(2),
+.friend-eq i:nth-child(2) { animation-delay: -.42s; }
+.playing-bars i:nth-child(3),
+.eq-mark i:nth-child(3),
+.friend-eq i:nth-child(3) { animation-delay: -.2s; }
+
+@keyframes equalizer {
+  from { transform: scaleY(.58); opacity: .65; }
+  to { transform: scaleY(1.18); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .playing-bars i,
+  .eq-mark i,
+  .friend-eq i { animation: none; }
+}
