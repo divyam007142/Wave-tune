@@ -311,6 +311,116 @@ body { background: linear-gradient(135deg, #dce8f8 0%, #e8e2f4 48%, #f4dfe8 100%
   to { transform: scaleY(1.18); opacity: 1; }
 }
 
+/* Wave Tune desktop/tablet finish. The first reference pass was tuned to a
+   1024px mockup and made the live full-width app look miniature on larger
+   screens. Keep the same soft glass language, but restore useful scale. */
+.home-loading {
+  min-height: 430px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+}
+.loading-orb {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 20px;
+  color: var(--purple-deep);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(224,214,255,.9), rgba(255,255,255,.68));
+  box-shadow: 0 15px 34px rgba(109, 87, 175, .12);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.home-loading h2 { color: #4a4760; font-size: 18px; letter-spacing: -.04em; }
+.home-loading p { max-width: 330px; margin-top: 10px; color: #9b97aa; font-size: 11px; line-height: 1.6; }
+.home-empty { min-height: 430px; padding: 48px 25px; background: rgba(255,255,255,.42); box-shadow: 0 20px 65px rgba(105, 91, 149, .08); }
+.empty-state-brand { margin-bottom: 22px; }
+.empty-state-brand .logo-wordmark { font-size: 16px; }
+.empty-state-brand .logo-mark { width: 36px; height: 36px; border-radius: 12px; }
+.empty-state h2 { font-size: 22px; }
+.empty-state p { max-width: 410px; font-size: 11px; }
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 22px; }
+@keyframes breathe { 50% { transform: translateY(-4px); box-shadow: 0 20px 42px rgba(109, 87, 175, .2); } }
+
+@media (min-width: 901px) {
+  .app-shell { grid-template-columns: 230px minmax(0, 1fr) 288px; }
+  .sidebar { padding: 38px 24px 25px; gap: 33px; }
+  .sidebar-top { min-height: 34px; }
+  .reference-brand { font-size: 15px; letter-spacing: -.035em; }
+  .sidebar .nav-label { padding-inline: 13px; font-size: 9px; }
+  .sidebar .nav-item { gap: 11px; padding: 11px 13px; border-radius: 12px; font-size: 12px; }
+  .sidebar .nav-item svg { width: 17px; height: 17px; }
+  .sidebar-playlist { padding: 8px 12px; font-size: 11px; }
+  .playlist-dot { width: 25px; height: 25px; border-radius: 8px; }
+  .sidebar-actions .import-button { padding: 12px 10px; font-size: 11px; }
+  .desktop-toolbar { height: 88px; padding: 0 52px; gap: 18px; }
+  .toolbar-search { width: min(330px, 33vw); padding: 11px 14px; border-radius: 12px; font-size: 11px; }
+  .toolbar-search svg { width: 16px; height: 16px; }
+  .toolbar-profile { font-size: 11px; }
+  .toolbar-profile .profile-avatar, .toolbar-profile img { width: 34px; height: 34px; }
+  .view-shell { padding: 0 52px 155px; }
+  .page { max-width: 1180px; }
+  .reference-section-heading { margin-bottom: 16px; }
+  .reference-section-heading h1, .reference-section-heading h2 { font-size: 25px; }
+  .reference-section-heading span { font-size: 10px; }
+  .reference-release-layout { grid-template-columns: clamp(240px, 22vw, 330px) minmax(0, 1fr); gap: 30px; }
+  .reference-featured-cover { height: auto; aspect-ratio: 1; border-radius: 16px; }
+  .reference-cover-play { width: 40px; height: 40px; right: 14px; bottom: 14px; }
+  .reference-track-list { padding-top: 8px; }
+  .reference-track-row { min-height: 58px; grid-template-columns: 30px minmax(0, 1fr) 30px 28px 50px; gap: 9px; }
+  .reference-track-index { font-size: 11px; }
+  .reference-track-main strong { font-size: 13px; }
+  .reference-track-main small { font-size: 10px; }
+  .reference-track-row .icon-button { width: 28px; height: 28px; }
+  .reference-track-duration { font-size: 10px; }
+  .home-page .reference-recent-section { margin-top: 36px; }
+  .reference-recent-section .card-row { gap: 20px; }
+  .reference-recent-section .card-title { margin-top: 10px; font-size: 11px; }
+  .reference-recent-section .card-subtitle { font-size: 10px; }
+  .reference-activity-rail { padding: 43px 27px 120px; }
+  .reference-rail-heading h2 { font-size: 16px; }
+  .friends-list { margin-top: 17px; }
+  .friend-row { min-height: 48px; gap: 10px; }
+  .friend-avatar { width: 30px; height: 30px; }
+  .friend-row strong { font-size: 10px; }
+  .friend-row small { font-size: 9px; }
+  .activity-heading { margin-top: 28px; }
+  .your-activity-list { margin-top: 12px; }
+  .your-activity-row { min-height: 48px; margin-bottom: 8px; padding: 7px 9px; border-radius: 10px; }
+  .your-activity-art { width: 30px; height: 30px; }
+  .your-activity-row strong { font-size: 10px; }
+  .your-activity-row small { font-size: 9px; }
+  .reference-activity-rail .rail-footer { margin-top: 30px; font-size: 9px; }
+  .desktop-player { left: 245px; right: 303px; bottom: 20px; min-height: 78px; padding: 11px 20px; border-radius: 15px; }
+  .player-art { width: 53px; height: 53px; border-radius: 11px; }
+  .player-track { gap: 12px; }
+  .player-track strong { font-size: 12px; }
+  .player-track small { font-size: 10px; }
+  .player-controls { gap: 6px; }
+  .player-controls .icon-button { width: 32px; height: 32px; }
+  .player-play { width: 34px; height: 34px; }
+  .player-progress { font-size: 9px; }
+  .player-actions .icon-button { width: 32px; height: 32px; }
+}
+
+@media (min-width: 761px) and (max-width: 900px) {
+  .app-shell { grid-template-columns: 196px minmax(0, 1fr); }
+  .sidebar { padding: 31px 18px 22px; }
+  .reference-brand { font-size: 13px; }
+  .desktop-toolbar { height: 78px; padding-inline: 34px; }
+  .view-shell { padding-inline: 34px; }
+  .reference-section-heading h1, .reference-section-heading h2 { font-size: 21px; }
+  .reference-release-layout { grid-template-columns: clamp(190px, 27vw, 250px) minmax(0, 1fr); gap: 22px; }
+  .reference-featured-cover { height: auto; aspect-ratio: 1; }
+  .reference-track-row { min-height: 48px; grid-template-columns: 25px minmax(0, 1fr) 25px 22px 42px; }
+  .reference-track-main strong { font-size: 11px; }
+  .reference-track-main small { font-size: 9px; }
+  .reference-activity-rail { display: none; }
+  .desktop-player { left: 210px; right: 14px; min-height: 68px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .playing-bars i,
   .eq-mark i,
