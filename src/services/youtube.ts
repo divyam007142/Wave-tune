@@ -10,7 +10,9 @@ export type YouTubeSearchResult = {
 
 type YouTubeSearchResponse = { results?: YouTubeSearchResult[] };
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL?.trim() ?? "").replace(/\/+$/, "");
+const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL?.trim() || (
+  import.meta.env.PROD ? "https://wave-tune.onrender.com" : ""
+)).replace(/\/+$/, "");
 
 function apiUrl(path: string) {
   return `${apiBaseUrl}${path}`;
