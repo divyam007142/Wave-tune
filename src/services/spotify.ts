@@ -1,7 +1,21 @@
 import type { Playlist, SearchResult, Track } from "../types/music";
 
 const clientId = import.meta.env.VITE_SPOTIFY_CLIENT_ID?.trim();
-const redirectUri = import.meta.env.VITE_SPOTIFY_REDIRECT_URI?.trim() || window.location.origin + "/";
+const configuredRedirectUri = import.meta.env.VITE_SPOTIFY_REDIRECT_URI?.trim();
+const redirectUri = (() => {
+  const currentOrigin = `${window.location.origin}/`;
+  if (!configuredRedirectUri) return currentOrigin;
+  try {
+    const configured = new URL(configuredRedirectUri, window.location.origin);
+    // A localhost redirect accidentally left in a Cloudflare build makes the
+    // OAuth callback return to the wrong app. Use the current site instead.
+    return configured.origin === window.location.origin
+      ? `${configured.origin}${configured.pathname || "/"}`
+      : currentOrigin;
+  } catch {
+    return currentOrigin;
+  }
+})();
 const tokenKey = "wave-tune:spotify-token";
 const verifierKey = "wave-tune:spotify-verifier";
 const stateKey = "wave-tune:spotify-state";
@@ -60,6 +74,7 @@ export type SpotifyProfile = {
 export type SpotifySnapshot = {
   profile: SpotifyProfile;
   tracks: Track[];
+  trendingTracks: Track[];
   recentTracks: Track[];
   playlists: Playlist[];
   likedTracks: Track[];
@@ -118,7 +133,8 @@ async function challengeFor(verifier: string) {
 
 function storedToken() {
   try {
-    const token = JSON.parse(sessionStorage.getItem(tokenKey) ?? "null") as SpotifyToken | null;
+    const raw = localStorage.getItem(tokenKey) ?? sessionStorage.getItem(tokenKey) ?? "null";
+    const token = JSON.parse(raw) as SpotifyToken | null;
     return token && token.expires_at > Date.now() ? token : null;
   } catch {
     return null;
@@ -185,7 +201,7 @@ export const spotifyService = {
     });
     if (!response.ok) throw new Error("Spotify could not complete the connection.");
     const token = (await response.json()) as { access_token: string; expires_in: number };
-    sessionStorage.setItem(tokenKey, JSON.stringify({ ...token, expires_at: Date.now() + token.expires_in * 1000 - 30_000 }));
+    localStorage.setItem(tokenKey, JSON.stringify({ ...token, expires_at: Date.now() + token.expires_in * 1000 - 30_000 }));
     sessionStorage.removeItem(verifierKey);
     sessionStorage.removeItem(stateKey);
     window.history.replaceState({}, document.title, window.location.pathname);
@@ -193,25 +209,37 @@ export const spotifyService = {
   },
 
   disconnect() {
+    localStorage.removeItem(tokenKey);
     sessionStorage.removeItem(tokenKey);
   },
 
   async loadSnapshot(): Promise<SpotifySnapshot> {
-    const [user, recent, top, playlistResponse, savedTracks] = await Promise.all([
-      api<SpotifyUser>("/me"),
+    // /me is the only required request. Optional library endpoints can be
+    // unavailable for a limited account or a newly issued token and should
+    // not turn the entire app into an empty state.
+    const user = await api<SpotifyUser>("/me");
+    const [recentResult, topResult, playlistResult, savedResult, featuredResult] = await Promise.allSettled([
       api<{ items: { track: SpotifyApiTrack }[] }>("/me/player/recently-played?limit=8"),
       api<{ items: SpotifyApiTrack[] }>("/me/top/tracks?limit=8&time_range=medium_term"),
       api<{ items: SpotifyPlaylistResponse[] }>("/me/playlists?limit=8"),
       api<{ items: { track: SpotifyApiTrack }[] }>("/me/tracks?limit=50"),
+      api<{ playlists?: { items?: SpotifyPlaylistResponse[] } }>("/browse/featured-playlists?limit=20&country=US"),
     ]);
-    const recentTracks = recent.items.map((item) => item.track).map(toTrack);
+    const recent = recentResult.status === "fulfilled" ? recentResult.value : { items: [] };
+    const top = topResult.status === "fulfilled" ? topResult.value : { items: [] };
+    const playlistResponse = playlistResult.status === "fulfilled" ? playlistResult.value : { items: [] };
+    const savedTracks = savedResult.status === "fulfilled" ? savedResult.value : { items: [] };
+    const featuredPlaylists = featuredResult.status === "fulfilled" ? featuredResult.value.playlists?.items ?? [] : [];
+    const recentTracks = recent.items.map((item) => item.track).filter(Boolean).map(toTrack);
     const tracks = [...recent.items.map((item) => item.track), ...top.items]
       .filter((track, index, list) => list.findIndex((item) => item.id === track.id) === index)
       .map(toTrack);
+    const trendingPlaylist = featuredPlaylists.find((playlist) => /top hits|viral|trending/i.test(playlist.name)) ?? featuredPlaylists[0];
+    const trendingTracks = trendingPlaylist ? await playlistTracks(trendingPlaylist.id).catch(() => []) : [];
     const playlists = await Promise.all(
       playlistResponse.items.map(async (playlist) => ({
         ...toPlaylist(playlist),
-        tracks: await playlistTracks(playlist.id),
+        tracks: await playlistTracks(playlist.id).catch(() => []),
       })),
     );
     return {
@@ -223,6 +251,7 @@ export const spotifyService = {
         product: user.product,
       },
       tracks,
+      trendingTracks,
       recentTracks,
       playlists,
       likedTracks: savedTracks.items.map((item) => item.track).filter(Boolean).map(toTrack),
