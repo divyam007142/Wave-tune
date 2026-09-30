@@ -12,6 +12,12 @@ import { clearLocalTracks, loadLocalTracks, readStored, saveLocalTrack, writeSto
 import { youtubePlaybackProvider } from "../services/youtube";
 import type { Track } from "../types/music";
 
+type PlayerProviderProps = {
+  children: ReactNode;
+  isAuthenticated?: boolean;
+  onRequireAuth?: () => void;
+  onPlaybackEvent?: (track: Track, seconds: number) => void;
+};
 type RepeatMode = "off" | "all" | "one";
 type PlayerContextValue = {
   currentTrack: Track | null;
@@ -50,7 +56,7 @@ function formatImportedName(name: string) {
   return name.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").trim() || "Untitled track";
 }
 
-export function PlayerProvider({ children }: { children: ReactNode }) {
+export function PlayerProvider({ children, isAuthenticated = false, onRequireAuth, onPlaybackEvent }: PlayerProviderProps) {
   const [library, setLibrary] = useState<Track[]>([]);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queue, setQueue] = useState<Track[]>([]);
@@ -68,6 +74,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const playContextRef = useRef<Track[]>([]);
   const repeatRef = useRef<RepeatMode>("all");
   const nextRef = useRef<() => void>(() => undefined);
+  const authRef = useRef(isAuthenticated);
+  const requireAuthRef = useRef(onRequireAuth);
+  const playbackEventRef = useRef(onPlaybackEvent);
+  const lastReportedTimeRef = useRef(0);
+  authRef.current = isAuthenticated;
+  requireAuthRef.current = onRequireAuth;
+  playbackEventRef.current = onPlaybackEvent;
   repeatRef.current = repeat;
 
   useEffect(() => {
@@ -76,7 +89,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     audio.preload = "metadata";
     audio.volume = volume;
     audioRef.current = audio;
-    const onTimeUpdate = () => setCurrentTime(audio.currentTime);
+    const onTimeUpdate = () => {
+      setCurrentTime(audio.currentTime);
+      const delta = audio.currentTime - lastReportedTimeRef.current;
+      if (delta >= 15 && currentTrack) {
+        playbackEventRef.current?.(currentTrack, delta);
+        lastReportedTimeRef.current = audio.currentTime;
+      }
+    };
     const onLoaded = () => {
       setDuration(Number.isFinite(audio.duration) ? audio.duration : currentTrack?.duration ?? 0);
       setIsLoading(false);
@@ -142,6 +162,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const requestedTrack = currentTrack;
     let cancelled = false;
     setCurrentTime(0);
+    lastReportedTimeRef.current = 0;
     setDuration(requestedTrack.duration);
     setPlaybackError(null);
 
@@ -193,22 +214,32 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [currentTrack, isPlaying]);
 
   const playTrack = useCallback((track: Track, context?: Track[]) => {
+    if (!authRef.current) {
+      const played = readStored<string[]>("wave-tune:guest-played", []);
+      if (!played.includes(track.id) && played.length >= 5) {
+        setPlaybackError("Your five free songs are used. Sign in with Google to keep listening.");
+        requireAuthRef.current?.();
+        return;
+      }
+      if (!played.includes(track.id)) writeStored("wave-tune:guest-played", [...played, track.id]);
+    }
     playContextRef.current = context?.length ? context : [...library, track];
     setCurrentTrack(track);
     setQueue((existing) => (context?.length ? context.filter((item) => item.id !== track.id) : existing));
     setIsPlaying(true);
     setPlaybackError(null);
+    onPlaybackEvent?.(track, 0);
     setRecentlyPlayed((existing) => {
       const next = [track.id, ...existing.filter((id) => id !== track.id)].slice(0, 12);
       writeStored("recent", next);
       return next;
     });
-  }, [library]);
+  }, [library, onPlaybackEvent]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !currentTrack) {
-      setPlaybackError("Connect Spotify and choose a track to start listening.");
+      setPlaybackError("Choose a track to start listening.");
       return;
     }
     if (isPlaying) {
