@@ -38,8 +38,10 @@ export function YouTubeEmbed() {
             onStateChange: (event) => {
               if (!disposed) callbacksRef.current.reportYouTubeState(event.data);
             },
-            onError: () => {
-              if (!disposed) callbacksRef.current.reportYouTubeError();
+            onError: (event) => {
+              if (!disposed) callbacksRef.current.reportYouTubeError(
+                `YouTube couldn't play this video (player error ${event.data}). Try another track.`,
+              );
             },
           },
         });
