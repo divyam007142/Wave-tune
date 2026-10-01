@@ -6,15 +6,66 @@ import {
   Trash2, Upload, UserRound, Volume2, VolumeX, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { SignIn, SignUp, useAuth, useClerk, useUser } from "@clerk/react";
+import { ClerkProvider, SignIn, SignUp, useAuth, useClerk, useUser } from "@clerk/react";
+import { publishableKeyFromHost } from "@clerk/react/internal";
+import { dark } from "@clerk/themes";
 import { Redirect, Route, Router, Switch, useLocation } from "wouter";
 import { usePlayer } from "./context/PlayerContext";
-import { accountService, setAccountTokenGetter, type AccountSnapshot, type ActivityUser, type AppProfile } from "./services/account";
+import { PlayerProvider } from "./context/PlayerContext";
+import { accountService, type AccountSnapshot, type AppProfile } from "./services/account";
 import { catalogService } from "./services/catalog";
 import type { Playlist, SearchResult, Track } from "./types/music";
 
 type View = "home" | "search" | "library" | "liked" | "recent" | "playlists" | "settings";
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+const clerkPubKey = publishableKeyFromHost(
+  window.location.hostname,
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+);
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+
+const clerkAppearance = {
+  theme: dark,
+  cssLayerName: "clerk",
+  options: {
+    logoPlacement: "inside" as const,
+    logoLinkUrl: basePath || "/",
+    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
+    socialButtonsPlacement: "top" as const,
+    socialButtonsVariant: "blockButton" as const,
+  },
+  variables: {
+    colorPrimary: "#caff5c",
+    colorForeground: "#f4f6ee",
+    colorMutedForeground: "#9da493",
+    colorDanger: "#ff7a85",
+    colorBackground: "#11150f",
+    colorInput: "#171d15",
+    colorInputForeground: "#f4f6ee",
+    colorNeutral: "#30382d",
+    fontFamily: "Manrope, sans-serif",
+    borderRadius: "12px",
+  },
+  elements: {
+    rootBox: { width: "100%", display: "flex", justifyContent: "center" },
+    cardBox: { width: "440px", maxWidth: "100%", background: "#11150f", borderRadius: "18px" },
+    card: { boxShadow: "none", border: "1px solid #283025", background: "transparent" },
+    footer: { boxShadow: "none", border: "0", background: "transparent" },
+    headerTitle: { color: "#f4f6ee", fontWeight: 700 },
+    headerSubtitle: { color: "#9da493" },
+    socialButtonsBlockButtonText: { color: "#f4f6ee", fontWeight: 600 },
+    formFieldLabel: { color: "#e6eadf" },
+    formFieldInput: { color: "#f4f6ee", background: "#171d15", borderColor: "#30382d" },
+    formButtonPrimary: { color: "#10140e", background: "#caff5c", fontWeight: 800 },
+    footerActionLink: { color: "#caff5c" },
+    footerActionText: { color: "#9da493" },
+    dividerText: { color: "#899182" },
+  },
+};
+
+if (!clerkPubKey) {
+  throw new Error("Wave Tune sign-in is not configured. Set VITE_CLERK_PUBLISHABLE_KEY for the frontend build.");
+}
 
 function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return "0:00";
@@ -39,7 +90,7 @@ function WaveLogo({ compact = false }: { compact?: boolean }) {
 }
 
 function IconButton({ label, onClick, children, active = false, className = "" }: { label: string; onClick?: () => void; children: ReactNode; active?: boolean; className?: string }) {
-  return <motion.button whileTap={{ scale: .92 }} className={`icon-button ${active ? "is-active" : ""} ${className}`} aria-label={label} title={label} onClick={onClick}>{children}</motion.button>;
+  return <motion.button type="button" whileTap={{ scale: .92 }} className={`icon-button ${active ? "is-active" : ""} ${className}`} aria-label={label} title={label} onClick={onClick}>{children}</motion.button>;
 }
 
 function TrackRow({ track, index, context, onAddToPlaylist }: { track: Track; index?: number; context?: Track[]; onAddToPlaylist?: (track: Track) => void }) {
@@ -92,42 +143,101 @@ function TopBar({ profile, onSearch, onSettings, onLogin, onMenu }: { profile?: 
 function HomeView({ tracks, recentTracks, loading, error, onRefresh, onNavigate, onAddToPlaylist }: { tracks: Track[]; recentTracks: Track[]; loading: boolean; error: string | null; onRefresh: () => void; onNavigate: (view: View) => void; onAddToPlaylist: (track: Track) => void }) {
   const { currentTrack, playTrack } = usePlayer();
   const featured = tracks[0] ?? currentTrack;
-  const recent = (recentTracks.length ? recentTracks : tracks).slice(0, 5);
+  const recent = recentTracks.slice(0, 5);
   if (loading) return <div className="page home-page"><div className="home-loading"><div className="loading-orb"><Music2 size={24} /></div><h2>Finding the next wave</h2><p>Wave Tune is loading live music, artwork, and your listening space.</p></div></div>;
   if (error || !tracks.length || !featured) return <div className="page home-page"><div className="empty-state home-empty"><div className="empty-state-brand"><WaveLogo /></div><span className="eyebrow">YOUR MUSIC, YOUR SPACE</span><h2>{error ? "The live catalog needs a refresh" : "No live songs yet"}</h2><p>{error ?? "Search the catalog to find something to play."}</p><div className="empty-actions"><button className="secondary-button" onClick={onRefresh}><Activity size={14} /> Try again</button><button className="secondary-button" onClick={() => onNavigate("search")}><Search size={14} /> Explore</button></div></div></div>;
-  return <div className="page home-page reference-home"><section className="reference-release-section"><div className="reference-section-heading"><div><span className="eyebrow">WAVE TUNE DISCOVER</span><h1>Trending right now</h1></div><span>Live from the music catalog</span></div><div className="reference-release-layout"><div className="reference-featured-cover"><Artwork track={featured} priority /><button className="reference-cover-play" aria-label={`Play ${featured.title}`} onClick={() => playTrack(featured, tracks)}><Play size={16} fill="currentColor" /></button></div><div className="reference-track-list">{tracks.slice(0, 5).map((track, index) => <TrackRow key={track.id} track={track} index={index} context={tracks} onAddToPlaylist={onAddToPlaylist} />)}</div></div></section><section className="reference-recent-section"><div className="reference-section-heading"><div><span className="eyebrow">YOUR LISTENING</span><h2>Recently played</h2></div><button className="reference-see-all" onClick={() => onNavigate("recent")}>See all</button></div><div className="card-row">{recent.map((track) => <TrackCard key={track.id} track={track} context={recent} onAddToPlaylist={onAddToPlaylist} />)}</div></section></div>;
+  return <div className="page home-page reference-home"><section className="reference-release-section"><div className="reference-section-heading"><div><span className="eyebrow">WAVE TUNE DISCOVER</span><h1>Trending right now</h1></div><span>Live from the music catalog</span></div><div className="reference-release-layout"><div className="reference-featured-cover"><Artwork track={featured} priority /><button className="reference-cover-play" aria-label={`Play ${featured.title}`} onClick={() => playTrack(featured, tracks)}><Play size={16} fill="currentColor" /></button></div><div className="reference-track-list">{tracks.slice(0, 5).map((track, index) => <TrackRow key={track.id} track={track} index={index} context={tracks} onAddToPlaylist={onAddToPlaylist} />)}</div></div></section><section className="reference-recent-section"><div className="reference-section-heading"><div><span className="eyebrow">YOUR LISTENING</span><h2>Recently played</h2></div><button className="reference-see-all" onClick={() => onNavigate("recent")}>See all</button></div>{recent.length ? <div className="card-row">{recent.map((track) => <TrackCard key={track.id} track={track} context={recent} onAddToPlaylist={onAddToPlaylist} />)}</div> : <div className="empty-inline">Your listening history will appear here after you play a song.</div>}</section></div>;
 }
 
 function SearchView({ onAddToPlaylist }: { onAddToPlaylist: (track: Track) => void }) {
   const [query, setQuery] = useState(""); const [results, setResults] = useState<SearchResult | null>(null); const [loading, setLoading] = useState(false); const [error, setError] = useState<string | null>(null);
-  useEffect(() => { if (!query.trim()) { setResults(null); return; } const timer = window.setTimeout(() => { setLoading(true); catalogService.search(query).then(setResults).catch((e) => setError(e instanceof Error ? e.message : "Search is unavailable.")).finally(() => setLoading(false)); }, 300); return () => window.clearTimeout(timer); }, [query]);
+  useEffect(() => {
+    if (!query.trim()) { setResults(null); setLoading(false); return; }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      catalogService.search(query)
+        .then((result) => { if (active) setResults(result); })
+        .catch((e) => { if (active) setError(e instanceof Error ? e.message : "Search is unavailable."); })
+        .finally(() => { if (active) setLoading(false); });
+    }, 300);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [query]);
   return <div className="page search-page"><div className="search-heading"><span className="eyebrow">LIVE CATALOG</span><h1>Find your next song.</h1><p>Search real catalog results, then press play to start a Wave Tune session.</p></div><div className="search-input-wrap"><Search size={19} /><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setError(null); }} placeholder="Search songs, artists, or moods..." /><kbd>⌘ K</kbd>{query && <button onClick={() => setQuery("")} aria-label="Clear search"><X size={16} /></button>}</div>{loading && <div className="skeleton-stack">{[1, 2, 3, 4].map((item) => <div className="skeleton-row" key={item}><span /><i /><b /><em /></div>)}</div>}{error && <div className="empty-state"><Music2 size={24} /><h2>Search is unavailable</h2><p>{error}</p></div>}{!loading && !error && query && !results?.tracks.length && <div className="empty-state"><Search size={24} /><h2>Nothing found</h2><p>Try a different artist, track, or mood.</p></div>}{!loading && results?.tracks.length ? <div className="search-results"><SectionHeader eyebrow="TRACKS" title={`${results.tracks.length} results`} /><div className="track-list">{results.tracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={results.tracks} onAddToPlaylist={onAddToPlaylist} />)}</div></div> : !query && <div className="search-start"><div className="search-start-icon"><Search size={25} /></div><h2>Search the catalog</h2><p>Start with a song, artist, or mood.</p><div className="search-suggestions"><button onClick={() => setQuery("The Weeknd")}>The Weeknd</button><button onClick={() => setQuery("lofi beats")}>lofi beats</button><button onClick={() => setQuery("Billie Eilish")}>Billie Eilish</button></div></div>}</div>;
 }
 
 function QueuePanel() {
   const { currentTrack, queue, removeFromQueue, clearQueue, playTrack } = usePlayer();
-  return <aside className="queue-panel"><div className="queue-head"><div><span className="eyebrow">LISTENING NEXT</span><h2>Queue</h2></div><button className="text-button" onClick={clearQueue}>Clear all</button></div><div className="now-playing-card"><Artwork track={currentTrack} className="queue-now-art" /><span className="queue-now-copy"><small>NOW PLAYING</small><strong>{currentTrack?.title ?? "Nothing playing"}</strong><span>{currentTrack?.artist ?? "Choose a track"}</span></span><span className="eq-mark"><i /><i /><i /></span></div><div className="queue-list">{queue.length ? queue.map((track, index) => <motion.div layout key={track.id} className="queue-item"><span className="queue-number">{String(index + 1).padStart(2, "0")}</span><button onClick={() => playTrack(track, queue)}><Artwork track={track} className="queue-art" /><span><strong>{track.title}</strong><small>{track.artist}</small></span></button><IconButton label={`Remove ${track.title} from queue`} onClick={() => removeFromQueue(track.id)}><X size={14} /></IconButton></motion.div>) : <div className="queue-empty"><ListMusic size={24} /><p>Your queue is empty</p><span>Add songs from a card to keep listening.</span></div>}</div><div className="queue-footer"><span>{queue.length} {queue.length === 1 ? "song" : "songs"} queued</span><button onClick={clearQueue}><Trash2 size={14} /> Clear</button></div></aside>;
+  return <section className="queue-panel"><div className="queue-head"><div><span className="eyebrow">LISTENING NEXT</span><h2>Queue</h2></div><button className="text-button" onClick={clearQueue}>Clear all</button></div><div className="now-playing-card"><Artwork track={currentTrack} className="queue-now-art" /><span className="queue-now-copy"><small>NOW PLAYING</small><strong>{currentTrack?.title ?? "Nothing playing"}</strong><span>{currentTrack?.artist ?? "Choose a track"}</span></span><span className="eq-mark"><i /><i /><i /></span></div><div className="queue-list">{queue.length ? queue.map((track, index) => <motion.div layout key={track.id} className="queue-item"><span className="queue-number">{String(index + 1).padStart(2, "0")}</span><button onClick={() => playTrack(track, queue)}><Artwork track={track} className="queue-art" /><span><strong>{track.title}</strong><small>{track.artist}</small></span></button><IconButton label={`Remove ${track.title} from queue`} onClick={() => removeFromQueue(track.id)}><X size={14} /></IconButton></motion.div>) : <div className="queue-empty"><ListMusic size={24} /><p>Your queue is empty</p><span>Add songs from a card to keep listening.</span></div>}</div><div className="queue-footer"><span>{queue.length} {queue.length === 1 ? "song" : "songs"} queued</span><button onClick={clearQueue}><Trash2 size={14} /> Clear</button></div></section>;
 }
 
-function ActivityRail({ users, recentTracks }: { users: ActivityUser[]; recentTracks: Track[] }) {
-  const fallback = recentTracks.slice(0, 4);
-  return <aside className="activity-rail reference-activity-rail"><div className="reference-rail-heading"><h2>Friends activity</h2></div><div className="friends-list">{users.length ? users.map((user) => <div className="friend-row" key={user.id}>{user.image ? <img className="friend-avatar" src={user.image} alt="" /> : <div className="friend-avatar profile-avatar">{user.name.slice(0, 2).toUpperCase()}</div>}<span><strong>{user.name}</strong><small>{user.lastTrack?.title ?? "Listening recently"}</small></span><span className="friend-eq"><i /><i /><i /></span></div>) : fallback.map((track) => <div className="friend-row" key={track.id}><Artwork track={track} className="friend-avatar" /><span><strong>Wave Tune listener</strong><small>{track.title}</small></span></div>)}</div><div className="reference-rail-heading activity-heading"><h2>Your activity</h2></div><div className="your-activity-list">{recentTracks.slice(0, 5).map((track) => <div className="your-activity-row" key={track.id}><Artwork track={track} className="your-activity-art" /><span><strong>{track.title}</strong><small>{track.artist}</small></span><MoreHorizontal size={13} /></div>)}</div><div className="rail-footer"><Activity size={15} /><span>Listening time is saved to your account.</span></div></aside>;
+function ActivityRail({ recentTracks }: { recentTracks: Track[] }) {
+  return <aside className="activity-rail reference-activity-rail"><div className="reference-rail-heading"><h2>Your activity</h2></div><div className="your-activity-list">{recentTracks.length ? recentTracks.slice(0, 5).map((track) => <div className="your-activity-row" key={track.id}><Artwork track={track} className="your-activity-art" /><span><strong>{track.title}</strong><small>{track.artist}</small></span><MoreHorizontal size={13} /></div>) : <div className="empty-inline">Play a song to start your history.</div>}</div><div className="rail-footer"><Activity size={15} /><span>Listening time is saved to your account.</span></div><QueuePanel /></aside>;
 }
 
 function DesktopPlayer({ onExpand }: { onExpand: () => void }) {
-  const { currentTrack, isPlaying, togglePlay, currentTime, duration, previous, next, seek, likedIds, toggleLike, isLoading } = usePlayer();
-  return <div className="desktop-player"><button className="player-track" onClick={onExpand}><Artwork track={currentTrack} className="player-art" /><span><strong>{currentTrack?.title ?? "Nothing playing"}</strong><small>{currentTrack?.artist ?? "Choose a track"}</small></span></button><div className="player-controls"><div><IconButton label="Shuffle"><Shuffle size={15} /></IconButton><IconButton label="Previous" onClick={previous}><SkipBack size={17} fill="currentColor" /></IconButton><motion.button whileTap={{ scale: .9 }} className="player-play" onClick={togglePlay}>{isLoading ? <span className="spinner" /> : isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</motion.button><IconButton label="Next" onClick={next}><SkipForward size={17} fill="currentColor" /></IconButton><IconButton label="Repeat"><Radio size={15} /></IconButton></div><div className="player-progress"><span>{formatTime(currentTime)}</span><input aria-label="Song progress" type="range" min="0" max={duration || 1} step=".1" value={Math.min(currentTime, duration || 1)} onChange={(event) => seek(Number(event.target.value))} /><span>{formatTime(duration)}</span></div></div><div className="player-actions"><IconButton label={currentTrack && likedIds.includes(currentTrack.id) ? "Unlike song" : "Like song"} onClick={() => currentTrack && toggleLike(currentTrack)}><Heart size={16} fill={currentTrack && likedIds.includes(currentTrack.id) ? "currentColor" : "none"} /></IconButton><IconButton label="Open full player" onClick={onExpand}><ListMusic size={16} /></IconButton></div></div>;
+  const { currentTrack, isPlaying, togglePlay, currentTime, duration, previous, next, seek, likedIds, toggleLike, isLoading, shuffle, toggleShuffle, repeat, cycleRepeat } = usePlayer();
+  return <div className="desktop-player"><button className="player-track" onClick={onExpand}><Artwork track={currentTrack} className="player-art" /><span><strong>{currentTrack?.title ?? "Nothing playing"}</strong><small>{currentTrack?.artist ?? "Choose a track"}</small></span></button><div className="player-controls"><div><IconButton label={`Shuffle ${shuffle ? "on" : "off"}`} active={shuffle} onClick={toggleShuffle}><Shuffle size={15} /></IconButton><IconButton label="Previous" onClick={previous}><SkipBack size={17} fill="currentColor" /></IconButton><motion.button type="button" whileTap={{ scale: .9 }} className="player-play" aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlay}>{isLoading ? <span className="spinner" /> : isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</motion.button><IconButton label="Next" onClick={next}><SkipForward size={17} fill="currentColor" /></IconButton><IconButton label={`Repeat ${repeat}`} active={repeat !== "off"} onClick={cycleRepeat}><Radio size={15} /></IconButton></div><div className="player-progress"><span>{formatTime(currentTime)}</span><input aria-label="Song progress" type="range" min="0" max={duration || 1} step=".1" value={Math.min(currentTime, duration || 1)} onChange={(event) => seek(Number(event.target.value))} /><span>{formatTime(duration)}</span></div></div><div className="player-actions"><IconButton label={currentTrack && likedIds.includes(currentTrack.id) ? "Unlike song" : "Like song"} onClick={() => currentTrack && toggleLike(currentTrack)}><Heart size={16} fill={currentTrack && likedIds.includes(currentTrack.id) ? "currentColor" : "none"} /></IconButton><IconButton label="Open full player" onClick={onExpand}><ListMusic size={16} /></IconButton></div></div>;
 }
 
 function FullPlayer({ onClose }: { onClose: () => void }) {
   const { currentTrack, isPlaying, isLoading, togglePlay, currentTime, duration, seek, previous, next, volume, setVolume, shuffle, toggleShuffle, repeat, cycleRepeat, likedIds, toggleLike, addToQueue, playbackError } = usePlayer();
-  if (!currentTrack) return <motion.div className="full-player-overlay"><motion.section className="full-player"><div className="full-player-head"><IconButton label="Close player" onClick={onClose}><ChevronDown size={21} /></IconButton><span>NOW PLAYING</span><span /></div><div className="empty-state"><Music2 size={28} /><h2>Nothing playing</h2><p>Choose a live catalog song to open the player.</p></div></motion.section></motion.div>;
   const rangeStyle = { "--range-progress": `${duration ? currentTime / duration * 100 : 0}%` } as CSSProperties;
-  return <motion.div className="full-player-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><motion.section className="full-player" initial={{ y: 24 }} animate={{ y: 0 }}><div className="full-player-head"><IconButton label="Close player" onClick={onClose}><ChevronDown size={21} /></IconButton><span>NOW PLAYING</span><IconButton label="More options"><MoreHorizontal size={19} /></IconButton></div><div className="full-player-body"><div className="full-art-wrap"><Artwork track={currentTrack} className="full-art" /><div className="art-glow" /></div><div className="full-meta"><div><span className="source-pill source-catalog">Live catalog</span><h1>{currentTrack.title}</h1><p>{currentTrack.artist} · {currentTrack.album}</p></div><IconButton label="Like song" active={likedIds.includes(currentTrack.id)} onClick={() => toggleLike(currentTrack)} className="like-button"><Heart size={21} fill={likedIds.includes(currentTrack.id) ? "currentColor" : "none"} /></IconButton></div><div className="seek-wrap"><input style={rangeStyle} aria-label="Seek song" type="range" min="0" max={duration || 1} step=".1" value={Math.min(currentTime, duration || 1)} onChange={(event) => seek(Number(event.target.value))} /><div><span>{formatTime(currentTime)}</span><span>{formatTime(duration)}</span></div></div>{playbackError && <div className="playback-error"><span>{playbackError}</span></div>}<div className="full-controls"><IconButton label="Shuffle" active={shuffle} onClick={toggleShuffle}><Shuffle size={18} /></IconButton><IconButton label="Previous" onClick={previous}><SkipBack size={22} fill="currentColor" /></IconButton><motion.button whileTap={{ scale: .9 }} className="main-play" onClick={togglePlay}>{isLoading ? <span className="spinner spinner-dark" /> : isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</motion.button><IconButton label="Next" onClick={next}><SkipForward size={22} fill="currentColor" /></IconButton><IconButton label={`Repeat ${repeat}`} active={repeat !== "off"} onClick={cycleRepeat}><Radio size={18} /></IconButton></div><div className="full-secondary"><button onClick={() => addToQueue(currentTrack)}><ListPlus size={16} /> Add to queue</button><label><VolumeX size={15} /><input aria-label="Volume" type="range" min="0" max="1" step=".01" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /><Volume2 size={15} /></label></div></div></motion.section></motion.div>;
+  return <motion.div className="full-player-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+    <motion.section className="full-player" initial={{ y: 24 }} animate={{ y: 0 }}>
+      <div className="full-player-head"><IconButton label="Close player" onClick={onClose}><ChevronDown size={21} /></IconButton><span>NOW PLAYING</span><span /></div>
+      <div className="full-player-layout">
+        <div className="full-player-body">
+          {currentTrack ? <>
+            <div className="full-art-wrap"><Artwork track={currentTrack} className="full-art" /><div className="art-glow" /></div>
+            <div className="full-meta"><div><span className="source-pill source-catalog">Live catalog</span><h1>{currentTrack.title}</h1><p>{currentTrack.artist} · {currentTrack.album}</p></div><IconButton label={likedIds.includes(currentTrack.id) ? "Unlike song" : "Like song"} active={likedIds.includes(currentTrack.id)} onClick={() => toggleLike(currentTrack)} className="like-button"><Heart size={21} fill={likedIds.includes(currentTrack.id) ? "currentColor" : "none"} /></IconButton></div>
+            <div className="seek-wrap"><input style={rangeStyle} aria-label="Seek song" type="range" min="0" max={duration || 1} step=".1" value={Math.min(currentTime, duration || 1)} onChange={(event) => seek(Number(event.target.value))} /><div><span>{formatTime(currentTime)}</span><span>{formatTime(duration)}</span></div></div>
+            {playbackError && <div className="playback-error"><span>{playbackError}</span></div>}
+            <div className="full-controls"><IconButton label={`Shuffle ${shuffle ? "on" : "off"}`} active={shuffle} onClick={toggleShuffle}><Shuffle size={18} /></IconButton><IconButton label="Previous" onClick={previous}><SkipBack size={22} fill="currentColor" /></IconButton><motion.button type="button" whileTap={{ scale: .9 }} className="main-play" aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlay}>{isLoading ? <span className="spinner spinner-dark" /> : isPlaying ? <Pause size={24} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</motion.button><IconButton label="Next" onClick={next}><SkipForward size={22} fill="currentColor" /></IconButton><IconButton label={`Repeat ${repeat}`} active={repeat !== "off"} onClick={cycleRepeat}><Radio size={18} /></IconButton></div>
+            <div className="full-secondary"><button onClick={() => addToQueue(currentTrack)}><ListPlus size={16} /> Add to queue</button><label><VolumeX size={15} /><input aria-label="Volume" type="range" min="0" max="1" step=".01" value={volume} onChange={(event) => setVolume(Number(event.target.value))} /><Volume2 size={15} /></label></div>
+          </> : <div className="empty-state"><Music2 size={28} /><h2>Nothing playing</h2><p>Choose a live catalog song to open the player.</p></div>}
+        </div>
+        <QueuePanel />
+      </div>
+    </motion.section>
+  </motion.div>;
+}
+
+function MobilePlayer({ onExpand }: { onExpand: () => void }) {
+  const { currentTrack, isPlaying, isLoading, togglePlay, currentTime, duration } = usePlayer();
+  if (!currentTrack) return null;
+  return <div className="mini-player">
+    <button className="mini-track" onClick={onExpand}><Artwork track={currentTrack} className="mini-art" /><span><strong>{currentTrack.title}</strong><small>{currentTrack.artist}</small></span></button>
+    <button type="button" className="mini-play" aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlay}>{isLoading ? <span className="spinner" /> : isPlaying ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}</button>
+    <div className="mini-progress"><span style={{ width: `${duration ? Math.min(100, currentTime / duration * 100) : 0}%` }} /></div>
+  </div>;
 }
 
 function PlaylistPicker({ track, playlists, onClose, onAdded, onCreate }: { track: Track; playlists: Playlist[]; onClose: () => void; onAdded: (playlist: Playlist) => void; onCreate: () => void }) {
-  return <div className="modal-backdrop" onClick={onClose}><motion.div className="modal-card" initial={{ y: 12, opacity: 0 }} animate={{ y: 0, opacity: 1 }} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">SAVE SONG</span><h2>Add to playlist</h2></div><IconButton label="Close" onClick={onClose}><X size={18} /></IconButton></div><p className="modal-muted">{track.title}</p>{playlists.map((playlist) => <button className="playlist-picker-row" key={playlist.id} onClick={() => { void accountService.addToPlaylist(playlist.id, track).then((result) => onAdded(result.playlist)).catch(() => undefined); }}><PlaylistArtwork playlist={playlist} /><span>{playlist.name}</span><Plus size={15} /></button>)}<button className="secondary-button modal-create" onClick={onCreate}><Plus size={14} /> Create playlist</button></motion.div></div>;
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const add = async (playlist: Playlist) => {
+    setSaving(playlist.id);
+    setError("");
+    try {
+      const result = await accountService.addToPlaylist(playlist.id, track);
+      onAdded(result.playlist);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save this song.");
+    } finally {
+      setSaving(null);
+    }
+  };
+  return <div className="modal-backdrop" onClick={onClose}><motion.div className="modal-card" initial={{ y: 12, opacity: 0 }} animate={{ y: 0, opacity: 1 }} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">SAVE SONG</span><h2>Add to playlist</h2></div><IconButton label="Close" onClick={onClose}><X size={18} /></IconButton></div><p className="modal-muted">{track.title}</p>{playlists.length ? playlists.map((playlist) => <button className="playlist-picker-row" key={playlist.id} disabled={saving !== null} onClick={() => void add(playlist)}><PlaylistArtwork playlist={playlist} /><span>{playlist.name}</span>{saving === playlist.id ? <span className="spinner" /> : <Plus size={15} />}</button>) : <div className="empty-inline">Create a playlist to save this song.</div>}{error && <p className="form-error">{error}</p>}<button className="secondary-button modal-create" onClick={onCreate}><Plus size={14} /> Create playlist</button></motion.div></div>;
+}
+
+function PlaylistDetailView({ playlist, onBack, onPlay, onDelete, onAddToPlaylist }: { playlist: Playlist; onBack: () => void; onPlay: () => void; onDelete: () => void; onAddToPlaylist: (track: Track) => void }) {
+  const tracks = playlist.tracks ?? [];
+  return <div className="page playlist-page">
+    <button className="back-button" onClick={onBack}><ArrowLeft size={15} /> All playlists</button>
+    <section className="playlist-hero"><PlaylistArtwork playlist={playlist} /><div><span className="eyebrow">PLAYLIST</span><h1>{playlist.name}</h1><p>{playlist.description}</p><span className="playlist-meta">{tracks.length} songs · Curated by you</span><div className="playlist-actions">{tracks.length > 0 && <button className="main-play small" onClick={onPlay}><Play size={15} fill="currentColor" /> Play</button>}<button className="secondary-button" onClick={onDelete}><Trash2 size={14} /> Delete playlist</button></div></div></section>
+    {tracks.length ? <div className="track-list">{tracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={tracks} onAddToPlaylist={onAddToPlaylist} />)}</div> : <div className="empty-state compact-empty"><Radio size={23} /><h2>This playlist is ready for songs</h2><p>Save tracks from Discover or your home feed to fill it.</p></div>}
+  </div>;
 }
 
 function CreatePlaylist({ onClose, onCreated }: { onClose: () => void; onCreated: (playlist: Playlist) => void }) {
@@ -139,31 +249,249 @@ function AuthPages() {
   return <Switch><Route path="/sign-in/*?"><div className="auth-page"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div></Route><Route path="/sign-up/*?"><div className="auth-page"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></Route></Switch>;
 }
 
+function PlayerServices({ children }: { children: ReactNode }) {
+  const { isLoaded, isSignedIn } = useAuth();
+  const [, setLocation] = useLocation();
+  const savePlayback = useCallback((track: Track, seconds: number) => {
+    if (!isSignedIn) return;
+    void accountService.savePlayback(track, seconds)
+      .then(() => window.dispatchEvent(new Event("wave-tune:account-refresh")))
+      .catch((error) => window.dispatchEvent(new CustomEvent("wave-tune:account-error", {
+        detail: error instanceof Error ? error.message : "Account activity could not be saved.",
+      })));
+  }, [isSignedIn]);
+  const saveLike = useCallback((track: Track) => {
+    if (!isSignedIn) return;
+    void accountService.toggleLike(track)
+      .then(() => window.dispatchEvent(new Event("wave-tune:account-refresh")))
+      .catch((error) => window.dispatchEvent(new CustomEvent("wave-tune:account-error", {
+        detail: error instanceof Error ? error.message : "Your like could not be saved.",
+      })));
+  }, [isSignedIn]);
+  return <PlayerProvider
+    isAuthenticated={!isLoaded || Boolean(isSignedIn)}
+    onRequireAuth={() => setLocation("/sign-in")}
+    onPlaybackEvent={savePlayback}
+    onLikeEvent={saveLike}
+  >{children}</PlayerProvider>;
+}
+
 function AuthenticatedApp() {
-  const { isSignedIn, getToken } = useAuth(); const { user } = useUser(); const { signOut } = useClerk(); const [, setLocation] = useLocation(); const reduceMotion = useReducedMotion();
-  const [account, setAccount] = useState<AccountSnapshot | null>(null); const [tracks, setTracks] = useState<Track[]>([]); const [activity, setActivity] = useState<ActivityUser[]>([]); const [catalogLoading, setCatalogLoading] = useState(true); const [catalogError, setCatalogError] = useState<string | null>(null); const [activeView, setActiveView] = useState<View>("home"); const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null); const [sidebarCollapsed, setSidebarCollapsed] = useState(false); const [mobileMenuOpen, setMobileMenuOpen] = useState(false); const [fullPlayerOpen, setFullPlayerOpen] = useState(false); const [toast, setToast] = useState(""); const [addTrack, setAddTrack] = useState<Track | null>(null); const [createPlaylist, setCreatePlaylist] = useState(false); const fileInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => setAccountTokenGetter(() => getToken()), [getToken]);
-  const loadCatalog = useCallback(() => { setCatalogLoading(true); setCatalogError(null); catalogService.trending().then((result) => setTracks(result.tracks)).catch((e) => setCatalogError(e instanceof Error ? e.message : "Catalog unavailable.")).finally(() => setCatalogLoading(false)); }, []);
+  const { isSignedIn } = useAuth();
+  const { user } = useUser();
+  const { signOut } = useClerk();
+  const [, setLocation] = useLocation();
+  const reduceMotion = useReducedMotion();
+  const player = usePlayer();
+  const [account, setAccount] = useState<AccountSnapshot | null>(null);
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<View>("home");
+  const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [fullPlayerOpen, setFullPlayerOpen] = useState(false);
+  const [toast, setToast] = useState("");
+  const [addTrack, setAddTrack] = useState<Track | null>(null);
+  const [createPlaylist, setCreatePlaylist] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadCatalog = useCallback(() => {
+    setCatalogLoading(true);
+    setCatalogError(null);
+    catalogService.trending()
+      .then((result) => setTracks(result.tracks))
+      .catch((error) => setCatalogError(error instanceof Error ? error.message : "Catalog unavailable."))
+      .finally(() => setCatalogLoading(false));
+  }, []);
   useEffect(() => { void loadCatalog(); }, [loadCatalog]);
-  const loadAccount = useCallback(() => { if (!isSignedIn) { setAccount(null); return; } accountService.getSnapshot().then(setAccount).catch((e) => setToast(e instanceof Error ? e.message : "Account storage is unavailable.")); }, [isSignedIn]);
-  useEffect(() => { void loadAccount(); accountService.getActivity().then((result) => setActivity(result.users)).catch(() => setActivity([])); }, [loadAccount]);
-  const profile = account?.profile; const playlists = account?.playlists ?? [];
-  const recordPlayback = useCallback((track: Track, seconds: number) => { if (isSignedIn) void accountService.savePlayback(track, seconds).catch(() => undefined); }, [isSignedIn]);
-  const likeChanged = useCallback((track: Track) => { if (isSignedIn) void accountService.toggleLike(track).then(() => loadAccount()).catch(() => undefined); }, [isSignedIn, loadAccount]);
-  const navigate = (view: View) => { setActiveView(view); setSelectedPlaylist(null); setMobileMenuOpen(false); };
-  const login = () => setLocation("/sign-in"); const logout = () => { void signOut({ redirectUrl: basePath || "/" }); };
-  const [localTracks, setLocalTracks] = useState<Track[]>([]);
-  const importFiles = async (files: FileList | File[]) => { const imported: Track[] = []; for (const [index, file] of Array.from(files).entries()) if (file.type.startsWith("audio/")) imported.push({ id: `local-${file.name}-${file.lastModified}-${index}`, title: file.name.replace(/\.[^/.]+$/, ""), artist: "Local file", album: "Your library", duration: 0, artwork: "", accent: "#c5f269", audioUrl: URL.createObjectURL(file), source: "local", addedAt: Date.now() }); setLocalTracks((items) => [...imported, ...items]); setToast(`${imported.length} track${imported.length === 1 ? "" : "s"} added.`); };
-  const addToPlaylist = (track: Track) => { if (!isSignedIn) { login(); return; } setAddTrack(track); };
-  const page = activeView === "home" ? <HomeView tracks={tracks} recentTracks={account?.recentTracks ?? []} loading={catalogLoading} error={catalogError} onRefresh={loadCatalog} onNavigate={navigate} onAddToPlaylist={addToPlaylist} /> : activeView === "search" ? <SearchView onAddToPlaylist={addToPlaylist} /> : activeView === "library" ? <div className="page"><div className="page-heading split-heading"><div><span className="eyebrow">YOUR MUSIC</span><h1>Library</h1><p>Local files and songs you have discovered in Wave Tune.</p></div><button className="primary-button" onClick={() => fileInputRef.current?.click()}><Upload size={15} /> Import music</button></div>{localTracks.length ? <div className="track-list">{localTracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={localTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Upload size={24} /><h2>Bring your music with you</h2><p>Import local audio files to keep them in this browser.</p><button className="primary-button" onClick={() => fileInputRef.current?.click()}>Import audio files</button></div>}</div> : activeView === "liked" ? <div className="page"><div className="page-heading"><span className="eyebrow">YOUR FAVORITES</span><h1>Liked songs</h1><p>Songs you want to hear again.</p></div>{account?.likedTracks.length ? <div className="track-list">{account.likedTracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={account.likedTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Heart size={24} /><h2>Your likes will live here</h2><p>Tap the heart on any track to build this collection.</p></div>}</div> : activeView === "recent" ? <div className="page"><div className="page-heading"><span className="eyebrow">YOUR LISTENING</span><h1>Recently played</h1><p>A memory of the songs you have played in Wave Tune.</p></div>{account?.recentTracks.length ? <div className="track-list">{account.recentTracks.map((track, index) => <TrackRow key={`${track.id}-${index}`} track={track} index={index} context={account.recentTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Clock3 size={24} /><h2>Your history is empty</h2><p>Start playing something and it will show up here.</p></div>}</div> : activeView === "playlists" ? <div className="page"><div className="page-heading split-heading"><div><span className="eyebrow">YOUR COLLECTION</span><h1>Playlists</h1><p>Make space for whatever the day calls for.</p></div><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={15} /> New playlist</button></div>{playlists.length ? <div className="playlist-grid">{playlists.map((playlist) => <motion.button key={playlist.id} className="playlist-card" whileHover={{ y: -4 }} onClick={() => setSelectedPlaylist(playlist)}><PlaylistArtwork playlist={playlist} /><span><strong>{playlist.name}</strong><small>{playlist.description}</small></span><ArrowRight size={15} /></motion.button>)}</div> : <div className="empty-state"><ListMusic size={24} /><h2>Create your first playlist</h2><p>Save live catalog tracks into a private MongoDB-backed collection.</p><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={14} /> New playlist</button></div>}</div> : <div className="page settings-page"><div className="page-heading"><span className="eyebrow">MAKE IT YOURS</span><h1>Settings</h1><p>Manage your account and playback space.</p></div><div className="settings-groups"><section className="settings-group"><div className="settings-group-head"><UserRound size={17} /><div><h2>Wave Tune account</h2><p>Google sign-in is managed securely by Clerk. Wave Tune stores your app profile, never provider passwords.</p></div></div><div className="setting-line"><span><strong>{profile ? `Signed in as ${profile.name}` : "You are listening as a guest"}</strong><small>{profile ? `${Math.round(profile.totalListeningSeconds / 60)} minutes listened` : "The first five songs are free."}</small></span>{profile ? <button className="secondary-button" onClick={logout}><LogOut size={14} /> Sign out</button> : <button className="primary-button" onClick={login}><LogIn size={14} /> Log in with Google</button>}</div></section><section className="settings-group"><div className="settings-group-head"><SlidersHorizontal size={17} /><div><h2>Playback</h2><p>Browser audio with a live music source.</p></div></div><div className="setting-line"><span><strong>Guest access</strong><small>Play five unique songs before sign-in is required.</small></span><span className="setting-value">5 songs</span></div></section></div></div>;
-  if (selectedPlaylist) return <div className="app-shell"><main className="main-column"><TopBar profile={profile} onSearch={() => navigate("search")} onSettings={() => navigate("settings")} onLogin={login} onMenu={() => setMobileMenuOpen(true)} /><div className="page playlist-page"><button className="back-button" onClick={() => setSelectedPlaylist(null)}><ArrowLeft size={15} /> All playlists</button><section className="playlist-hero"><PlaylistArtwork playlist={selectedPlaylist} /><div><span className="eyebrow">PLAYLIST</span><h1>{selectedPlaylist.name}</h1><p>{selectedPlaylist.description}</p><span className="playlist-meta">{selectedPlaylist.tracks?.length ?? 0} songs · Curated by you</span><div className="playlist-actions">{selectedPlaylist.tracks?.[0] && <button className="main-play small" onClick={() => usePlayer}><Play size={15} fill="currentColor" /> Play</button>}</div></div></section>{selectedPlaylist.tracks?.length ? <div className="track-list">{selectedPlaylist.tracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={selectedPlaylist.tracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state compact-empty"><Radio size={23} /><h2>This playlist is ready for songs</h2><p>Save tracks from Discover or your home feed to fill it.</p></div>}</div></main><QueuePanel /><DesktopPlayer onExpand={() => setFullPlayerOpen(true)} /><AnimatePresence>{fullPlayerOpen && <FullPlayer onClose={() => setFullPlayerOpen(false)} />}</AnimatePresence></div>;
-  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}><div className="ambient ambient-one" /><div className="ambient ambient-two" /><Sidebar activeView={activeView} onNavigate={navigate} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} onImport={() => fileInputRef.current?.click()} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} /><main className="main-column"><TopBar profile={profile} onSearch={() => navigate("search")} onSettings={() => navigate("settings")} onLogin={login} onMenu={() => setMobileMenuOpen(true)} /><AnimatePresence mode="wait" initial={!reduceMotion}><motion.div key={activeView} className="view-shell" initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }} transition={{ duration: .24 }}>{page}</motion.div></AnimatePresence></main><ActivityRail users={activity} recentTracks={account?.recentTracks ?? tracks.slice(0, 5)} /><QueuePanel /><DesktopPlayer onExpand={() => setFullPlayerOpen(true)} /><MobileNav activeView={activeView} onNavigate={navigate} /><input ref={fileInputRef} hidden type="file" accept="audio/*" multiple onChange={(event) => { if (event.target.files?.length) void importFiles(event.target.files); event.target.value = ""; }} />{toast && <motion.div className="toast" initial={{ y: 18, opacity: 0 }} animate={{ y: 0, opacity: 1 }} onClick={() => setToast("")}><Check size={15} /> {toast}</motion.div>}<AnimatePresence>{fullPlayerOpen && <FullPlayer onClose={() => setFullPlayerOpen(false)} />}{addTrack && <PlaylistPicker track={addTrack} playlists={playlists} onClose={() => setAddTrack(null)} onAdded={(playlist) => { setAccount((current) => current ? { ...current, playlists: current.playlists.map((item) => item.id === playlist.id ? playlist : item) } : current); setAddTrack(null); setToast(`Added to ${playlist.name}.`); }} onCreate={() => { setAddTrack(null); setCreatePlaylist(true); }} />}{createPlaylist && <CreatePlaylist onClose={() => setCreatePlaylist(false)} onCreated={(playlist) => { setAccount((current) => current ? { ...current, playlists: [playlist, ...current.playlists] } : current); setCreatePlaylist(false); setToast(`${playlist.name} created.`); }} />}</AnimatePresence></div>;
+
+  const loadAccount = useCallback(() => {
+    if (!isSignedIn) {
+      setAccount(null);
+      return;
+    }
+    accountService.getSnapshot()
+      .then(setAccount)
+      .catch((error) => setToast(error instanceof Error ? error.message : "Account storage is unavailable."));
+  }, [isSignedIn]);
+  useEffect(() => {
+    void loadAccount();
+  }, [isSignedIn, loadAccount]);
+  useEffect(() => {
+    const refresh = () => { void loadAccount(); };
+    const showError = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail;
+      if (message) setToast(message);
+    };
+    window.addEventListener("wave-tune:account-refresh", refresh);
+    window.addEventListener("wave-tune:account-error", showError);
+    return () => {
+      window.removeEventListener("wave-tune:account-refresh", refresh);
+      window.removeEventListener("wave-tune:account-error", showError);
+    };
+  }, [loadAccount]);
+  useEffect(() => {
+    if (isSignedIn && account) player.syncLikedIds(account.likedTracks.map((track) => track.id));
+  }, [account, isSignedIn, player.syncLikedIds]);
+
+  const profile = account?.profile ?? (isSignedIn && user ? {
+    id: user.id,
+    name: user.fullName || user.username || "Wave Tune listener",
+    email: user.primaryEmailAddress?.emailAddress,
+    image: user.imageUrl,
+    totalListeningSeconds: 0,
+  } : undefined);
+  const playlists = account?.playlists ?? [];
+  const localTracks = player.library;
+  const recentLocalTracks = player.recentlyPlayed
+    .map((id) => [...tracks, ...localTracks].find((track) => track.id === id))
+    .filter((track): track is Track => Boolean(track));
+  const recentTracks = isSignedIn ? account?.recentTracks ?? [] : recentLocalTracks;
+  const likedTracks = isSignedIn
+    ? account?.likedTracks ?? []
+    : [...tracks, ...localTracks].filter((track) => player.likedIds.includes(track.id));
+
+  const navigate = useCallback((view: View) => {
+    setActiveView(view);
+    setSelectedPlaylist(null);
+    setMobileMenuOpen(false);
+  }, []);
+  const login = useCallback(() => setLocation("/sign-in"), [setLocation]);
+  const logout = useCallback(() => { void signOut({ redirectUrl: basePath || "/" }); }, [signOut]);
+  const importFiles = async (files: FileList | File[]) => {
+    const count = Array.from(files).filter((file) => file.type.startsWith("audio/")).length;
+    try {
+      await player.importFiles(files);
+      setToast(`${count} track${count === 1 ? "" : "s"} added.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not import those audio files.");
+    }
+  };
+  const addToPlaylist = (track: Track) => {
+    if (!isSignedIn) {
+      login();
+      return;
+    }
+    setAddTrack(track);
+  };
+  const deletePlaylist = async () => {
+    if (!selectedPlaylist || !window.confirm(`Delete “${selectedPlaylist.name}” and its saved track list?`)) return;
+    try {
+      await accountService.deletePlaylist(selectedPlaylist.id);
+      setSelectedPlaylist(null);
+      void loadAccount();
+      setToast("Playlist deleted.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not delete this playlist.");
+    }
+  };
+  useEffect(() => {
+    const keyHandler = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        navigate("search");
+      }
+      if (event.key === "Escape") {
+        setFullPlayerOpen(false);
+        setMobileMenuOpen(false);
+        setAddTrack(null);
+        setCreatePlaylist(false);
+      }
+    };
+    window.addEventListener("keydown", keyHandler);
+    return () => window.removeEventListener("keydown", keyHandler);
+  }, [navigate]);
+
+  let page: ReactNode;
+  switch (activeView) {
+    case "home":
+      page = <HomeView tracks={tracks} recentTracks={recentTracks} loading={catalogLoading} error={catalogError} onRefresh={loadCatalog} onNavigate={navigate} onAddToPlaylist={addToPlaylist} />;
+      break;
+    case "search":
+      page = <SearchView onAddToPlaylist={addToPlaylist} />;
+      break;
+    case "library":
+      page = <div className="page"><div className="page-heading split-heading"><div><span className="eyebrow">YOUR MUSIC</span><h1>Library</h1><p>Local files and songs you have discovered in Wave Tune.</p></div><button className="primary-button" onClick={() => fileInputRef.current?.click()}><Upload size={15} /> Import music</button></div>{localTracks.length ? <div className="track-list">{localTracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={localTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Upload size={24} /><h2>Bring your music with you</h2><p>Import local audio files to keep them in this browser.</p><button className="primary-button" onClick={() => fileInputRef.current?.click()}>Import audio files</button></div>}</div>;
+      break;
+    case "liked":
+      page = <div className="page"><div className="page-heading"><span className="eyebrow">YOUR FAVORITES</span><h1>Liked songs</h1><p>Songs you want to hear again.</p></div>{likedTracks.length ? <div className="track-list">{likedTracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={likedTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Heart size={24} /><h2>Your likes will live here</h2><p>Tap the heart on any track to build this collection.</p></div>}</div>;
+      break;
+    case "recent":
+      page = <div className="page"><div className="page-heading"><span className="eyebrow">YOUR LISTENING</span><h1>Recently played</h1><p>A memory of the songs you have played in Wave Tune.</p></div>{recentTracks.length ? <div className="track-list">{recentTracks.map((track, index) => <TrackRow key={`${track.id}-${index}`} track={track} index={index} context={recentTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Clock3 size={24} /><h2>Your history is empty</h2><p>Start playing something and it will show up here.</p></div>}</div>;
+      break;
+    case "playlists":
+      page = <div className="page"><div className="page-heading split-heading"><div><span className="eyebrow">YOUR COLLECTION</span><h1>Playlists</h1><p>Make space for whatever the day calls for.</p></div><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={15} /> New playlist</button></div>{playlists.length ? <div className="playlist-grid">{playlists.map((playlist) => <motion.button key={playlist.id} className="playlist-card" whileHover={{ y: -4 }} onClick={() => setSelectedPlaylist(playlist)}><PlaylistArtwork playlist={playlist} /><span><strong>{playlist.name}</strong><small>{playlist.description}</small></span><ArrowRight size={15} /></motion.button>)}</div> : <div className="empty-state"><ListMusic size={24} /><h2>Create your first playlist</h2><p>Save live catalog tracks into a private MongoDB-backed collection.</p><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={14} /> New playlist</button></div>}</div>;
+      break;
+    case "settings":
+      page = <div className="page settings-page"><div className="page-heading"><span className="eyebrow">MAKE IT YOURS</span><h1>Settings</h1><p>Manage your account and playback space.</p></div><div className="settings-groups"><section className="settings-group"><div className="settings-group-head"><UserRound size={17} /><div><h2>Wave Tune account</h2><p>Sign-in is managed securely by Clerk. Wave Tune stores your app profile, never provider passwords.</p></div></div><div className="setting-line"><span><strong>{profile ? `Signed in as ${profile.name}` : "You are listening as a guest"}</strong><small>{profile ? `${Math.round(profile.totalListeningSeconds / 60)} minutes listened` : "The first five songs are free."}</small></span>{profile ? <button className="secondary-button" onClick={logout}><LogOut size={14} /> Sign out</button> : <button className="primary-button" onClick={login}><LogIn size={14} /> Log in with Google</button>}</div></section><section className="settings-group"><div className="settings-group-head"><SlidersHorizontal size={17} /><div><h2>Playback</h2><p>Browser audio with a live music source.</p></div></div><div className="setting-line"><span><strong>Guest access</strong><small>Play five unique songs before sign-in is required.</small></span><span className="setting-value">5 songs</span></div></section></div></div>;
+      break;
+  }
+
+  const activePage = selectedPlaylist ? <PlaylistDetailView
+    playlist={selectedPlaylist}
+    onBack={() => setSelectedPlaylist(null)}
+    onPlay={() => { const items = selectedPlaylist.tracks ?? []; if (items.length) player.playTrack(items[0], items); }}
+    onDelete={() => void deletePlaylist()}
+    onAddToPlaylist={addToPlaylist}
+  /> : page;
+
+  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+    <div className="ambient ambient-one" /><div className="ambient ambient-two" />
+    <Sidebar activeView={activeView} onNavigate={navigate} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} onImport={() => fileInputRef.current?.click()} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} />
+    <main className="main-column">
+      <TopBar profile={profile} onSearch={() => navigate("search")} onSettings={() => navigate("settings")} onLogin={login} onMenu={() => setMobileMenuOpen(true)} />
+      <AnimatePresence mode="wait" initial={!reduceMotion}><motion.div key={`${activeView}-${selectedPlaylist?.id ?? ""}`} className="view-shell" initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }} transition={{ duration: .24 }}>{activePage}</motion.div></AnimatePresence>
+    </main>
+    <ActivityRail recentTracks={recentTracks} />
+    <DesktopPlayer onExpand={() => setFullPlayerOpen(true)} />
+    <MobilePlayer onExpand={() => setFullPlayerOpen(true)} />
+    <MobileNav activeView={activeView} onNavigate={navigate} />
+    {mobileMenuOpen && <div className="mobile-drawer-backdrop" onClick={() => setMobileMenuOpen(false)}><div className="mobile-drawer" role="dialog" aria-modal="true" aria-label="Navigation menu" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><WaveLogo /><IconButton label="Close menu" onClick={() => setMobileMenuOpen(false)}><X size={18} /></IconButton></div><Sidebar activeView={activeView} onNavigate={navigate} collapsed={false} setCollapsed={() => undefined} onImport={() => { setMobileMenuOpen(false); fileInputRef.current?.click(); }} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} /></div></div>}
+    <input ref={fileInputRef} hidden type="file" accept="audio/*" multiple onChange={(event) => { if (event.target.files?.length) void importFiles(event.target.files); event.target.value = ""; }} />
+    {toast && <motion.div className="toast" initial={{ y: 18, opacity: 0 }} animate={{ y: 0, opacity: 1 }} onClick={() => setToast("")}><Check size={15} /> {toast}</motion.div>}
+    <AnimatePresence>
+      {fullPlayerOpen && <FullPlayer onClose={() => setFullPlayerOpen(false)} />}
+      {addTrack && <PlaylistPicker track={addTrack} playlists={playlists} onClose={() => setAddTrack(null)} onAdded={(playlist) => { setSelectedPlaylist((current) => current?.id === playlist.id ? playlist : current); setAddTrack(null); void loadAccount(); setToast(`Added to ${playlist.name}.`); }} onCreate={() => { setAddTrack(null); setCreatePlaylist(true); }} />}
+      {createPlaylist && <CreatePlaylist onClose={() => setCreatePlaylist(false)} onCreated={(playlist) => { setCreatePlaylist(false); void loadAccount(); setToast(`${playlist.name} created.`); }} />}
+    </AnimatePresence>
+  </div>;
 }
 
 function MobileNav({ activeView, onNavigate }: { activeView: View; onNavigate: (view: View) => void }) {
   return <nav className="mobile-nav" aria-label="Mobile navigation">{[{ id: "home" as View, label: "Home", icon: Home }, { id: "search" as View, label: "Search", icon: Search }, { id: "library" as View, label: "Library", icon: Library }, { id: "playlists" as View, label: "Playlists", icon: ListMusic }].map(({ id, label, icon: Icon }) => <button key={id} className={activeView === id ? "is-active" : ""} onClick={() => onNavigate(id)}><Icon size={19} /><span>{label}</span></button>)}</nav>;
 }
 
+function ClerkProviderWithRoutes() {
+  const [, setLocation] = useLocation();
+  const stripBase = (path: string) => basePath && path.startsWith(basePath)
+    ? path.slice(basePath.length) || "/"
+    : path;
+  return <ClerkProvider
+    publishableKey={clerkPubKey}
+    proxyUrl={clerkProxyUrl}
+    appearance={clerkAppearance}
+    signInUrl={`${basePath}/sign-in`}
+    signUpUrl={`${basePath}/sign-up`}
+    localization={{
+      signIn: { start: { title: "Welcome back", subtitle: "Sign in to continue listening" } },
+      signUp: { start: { title: "Join Wave Tune", subtitle: "Create your personal music space" } },
+    }}
+    routerPush={(to) => setLocation(stripBase(to))}
+    routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
+  >
+    <PlayerServices>
+      <Switch>
+        <Route path="/sign-in/*?"><div className="auth-page"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div></Route>
+        <Route path="/sign-up/*?"><div className="auth-page"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></Route>
+        <Route path="/"><AuthenticatedApp /></Route>
+        <Route><Redirect to="/" /></Route>
+      </Switch>
+    </PlayerServices>
+  </ClerkProvider>;
+}
+
 export default function App() {
-  return <Router base={basePath}><Switch><Route path="/sign-in/*?"><div className="auth-page"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div></Route><Route path="/sign-up/*?"><div className="auth-page"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></Route><Route path="/"><AuthenticatedApp /></Route><Route><Redirect to="/" /></Route></Switch></Router>;
+  return <Router base={basePath}><ClerkProviderWithRoutes /></Router>;
 }
