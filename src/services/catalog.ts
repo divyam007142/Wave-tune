@@ -11,7 +11,7 @@ async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
 
 export const catalogService = {
   trending() {
-    return request<{ tracks: Track[] }>("/api/catalog/trending");
+    return request<{ tracks: Track[]; notice?: string }>("/api/catalog/trending");
   },
 
   search(query: string, signal?: AbortSignal) {
