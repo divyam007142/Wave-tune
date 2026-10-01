@@ -245,10 +245,6 @@ function CreatePlaylist({ onClose, onCreated }: { onClose: () => void; onCreated
   return <div className="modal-backdrop" onClick={onClose}><motion.form className="modal-card" initial={{ y: 12, opacity: 0 }} animate={{ y: 0, opacity: 1 }} onClick={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); setSaving(true); accountService.createPlaylist(name, description).then((result) => onCreated(result.playlist)).catch((e) => setError(e instanceof Error ? e.message : "Could not create playlist.")).finally(() => setSaving(false)); }}><div className="modal-head"><div><span className="eyebrow">YOUR COLLECTION</span><h2>New playlist</h2></div><IconButton label="Close" onClick={onClose}><X size={18} /></IconButton></div><label className="field-label">Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Late night waves" required maxLength={80} /></label><label className="field-label">Description<input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What belongs here?" maxLength={180} /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={saving}>{saving ? "Saving..." : "Create playlist"}</button></motion.form></div>;
 }
 
-function AuthPages() {
-  return <Switch><Route path="/sign-in/*?"><div className="auth-page"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div></Route><Route path="/sign-up/*?"><div className="auth-page"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></Route></Switch>;
-}
-
 function PlayerServices({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
   const [, setLocation] = useLocation();
@@ -269,7 +265,7 @@ function PlayerServices({ children }: { children: ReactNode }) {
       })));
   }, [isSignedIn]);
   return <PlayerProvider
-    isAuthenticated={!isLoaded || Boolean(isSignedIn)}
+    isAuthenticated={Boolean(isLoaded && isSignedIn)}
     onRequireAuth={() => setLocation("/sign-in")}
     onPlaybackEvent={savePlayback}
     onLikeEvent={saveLike}
@@ -317,7 +313,13 @@ function AuthenticatedApp() {
       .catch((error) => setToast(error instanceof Error ? error.message : "Account storage is unavailable."));
   }, [isSignedIn]);
   useEffect(() => {
-    void loadAccount();
+    if (!isSignedIn) {
+      void loadAccount();
+      return;
+    }
+    accountService.syncProfile()
+      .then(() => loadAccount())
+      .catch((error) => setToast(error instanceof Error ? error.message : "Your verified profile could not be synced."));
   }, [isSignedIn, loadAccount]);
   useEffect(() => {
     const refresh = () => { void loadAccount(); };
