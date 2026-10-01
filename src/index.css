@@ -153,6 +153,22 @@ img { display: block; max-width: 100%; }
 .youtube-pending { display: grid; place-content: center; justify-items: center; gap: 12px; width: 100%; min-height: 220px; border: 1px solid #2a3026; border-radius: 16px; color: #a7ad9e; background: #11150f; font-size: 11px; }
 .youtube-pending p { margin: 0; }
 @keyframes shimmer { to { background-position: -200% 0; } }
+
+.catalog-notice { margin: 0 0 18px; padding: 11px 13px; color: #e5edcf; border: 1px solid rgba(202, 255, 92, .2); border-radius: 11px; background: rgba(202, 255, 92, .07); font-size: 11px; line-height: 1.5; }
+.youtube-player-dock { display: grid; gap: 8px; margin-bottom: 20px; }
+.youtube-player-dock .rail-label { color: #aab39e; }
+.youtube-player-dock .youtube-player-shell { height: 200px; }
+
+@media (max-width: 900px) {
+  .reference-activity-rail.has-youtube-player { display: contents; }
+  .reference-activity-rail.has-youtube-player > :not(.youtube-player-dock) { display: none; }
+  .youtube-player-dock { position: fixed; right: 12px; bottom: 101px; z-index: 12; width: min(88vw, 320px); padding: 8px; border: 1px solid var(--line-strong); border-radius: 17px; background: rgba(14, 18, 12, .96); box-shadow: 0 16px 50px rgba(0, 0, 0, .45); }
+  .youtube-player-dock .youtube-player-shell { height: 200px; }
+}
+
+@media (max-width: 760px) {
+  .youtube-player-dock { bottom: 148px; }
+}
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 
 @media (max-width: 1180px) {
