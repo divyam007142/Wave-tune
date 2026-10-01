@@ -10,12 +10,14 @@ import {
 } from "react";
 import { clearLocalTracks, loadLocalTracks, readStored, saveLocalTrack, writeStored } from "../services/storage";
 import { youtubePlaybackProvider } from "../services/youtube";
+import type { YouTubeIframePlayer } from "../services/youtubeIframe";
 import type { Track } from "../types/music";
 
 type PlayerProviderProps = {
   children: ReactNode;
   isAuthenticated?: boolean;
   onRequireAuth?: () => void;
+  onOpenPlayer?: () => void;
   onPlaybackEvent?: (track: Track, seconds: number) => void;
   onLikeEvent?: (track: Track) => void;
 };
@@ -34,6 +36,9 @@ type PlayerContextValue = {
   shuffle: boolean;
   repeat: RepeatMode;
   playbackError: string | null;
+  registerYouTubePlayer: (player: YouTubeIframePlayer | null) => void;
+  reportYouTubeState: (state: number) => void;
+  reportYouTubeError: (message?: string) => void;
   playTrack: (track: Track, context?: Track[]) => void;
   togglePlay: () => void;
   next: () => void;
@@ -58,7 +63,7 @@ function formatImportedName(name: string) {
   return name.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").trim() || "Untitled track";
 }
 
-export function PlayerProvider({ children, isAuthenticated = false, onRequireAuth, onPlaybackEvent, onLikeEvent }: PlayerProviderProps) {
+export function PlayerProvider({ children, isAuthenticated = false, onRequireAuth, onOpenPlayer, onPlaybackEvent, onLikeEvent }: PlayerProviderProps) {
   const [library, setLibrary] = useState<Track[]>([]);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queue, setQueue] = useState<Track[]>([]);
@@ -73,17 +78,21 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const [repeat, setRepeat] = useState<RepeatMode>("all");
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const youtubePlayerRef = useRef<YouTubeIframePlayer | null>(null);
   const playContextRef = useRef<Track[]>([]);
   const repeatRef = useRef<RepeatMode>("all");
   const nextRef = useRef<() => void>(() => undefined);
   const authRef = useRef(isAuthenticated);
   const requireAuthRef = useRef(onRequireAuth);
+  const openPlayerRef = useRef(onOpenPlayer);
   const playbackEventRef = useRef(onPlaybackEvent);
   const likeEventRef = useRef(onLikeEvent);
   const currentTrackRef = useRef(currentTrack);
   const lastReportedTimeRef = useRef(0);
+  const triedYouTubeIdsRef = useRef<string[]>([]);
   authRef.current = isAuthenticated;
   requireAuthRef.current = onRequireAuth;
+  openPlayerRef.current = onOpenPlayer;
   playbackEventRef.current = onPlaybackEvent;
   likeEventRef.current = onLikeEvent;
   currentTrackRef.current = currentTrack;
