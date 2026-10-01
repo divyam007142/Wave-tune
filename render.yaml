@@ -5,7 +5,7 @@ services:
     rootDir: Wave-tune
     buildCommand: npm ci && npm run build
     startCommand: npm run preview
-    healthCheckPath: /
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "22"
