@@ -10,16 +10,13 @@ export type YouTubeSearchResult = {
 
 type YouTubeSearchResponse = { results?: YouTubeSearchResult[] };
 
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL?.trim() || (
-  import.meta.env.PROD ? "https://wave-tune.onrender.com" : ""
-)).replace(/\/+$/, "");
-
 function apiUrl(path: string) {
-  return `${apiBaseUrl}${path}`;
+  return path;
 }
 
 export class YouTubePlaybackProvider {
-  private readonly cache = new Map<string, YouTubeSearchResult>();
+  private readonly candidates = new Map<string, YouTubeSearchResult[]>();
+  private readonly pendingSearches = new Map<string, Promise<YouTubeSearchResult[]>>();
 
   async search(query: string): Promise<YouTubeSearchResult[]> {
     const response = await fetch(apiUrl(`/api/youtube/search?q=${encodeURIComponent(query)}`));
@@ -28,15 +25,24 @@ export class YouTubePlaybackProvider {
     return data.results ?? [];
   }
 
-  async resolveTrack(track: Track): Promise<{ audioUrl: string; youtubeVideoId: string }> {
-    const cached = this.cache.get(track.id);
-    const result = cached ?? (await this.search(`${track.title} ${track.artist} official audio`))[0];
+  async resolveTrack(track: Track, excludedVideoIds: string[] = []): Promise<{ youtubeVideoId: string }> {
+    let candidates = this.candidates.get(track.id);
+    if (!candidates) {
+      let pending = this.pendingSearches.get(track.id);
+      if (!pending) {
+        pending = this.search(`${track.title} ${track.artist} official audio`);
+        this.pendingSearches.set(track.id, pending);
+      }
+      try {
+        candidates = await pending;
+      } finally {
+        if (this.pendingSearches.get(track.id) === pending) this.pendingSearches.delete(track.id);
+      }
+      this.candidates.set(track.id, candidates);
+    }
+    const result = candidates.find((candidate) => !excludedVideoIds.includes(candidate.id));
     if (!result) throw new Error(`No playable YouTube result found for ${track.title}.`);
-    this.cache.set(track.id, result);
-    return {
-      audioUrl: apiUrl(`/api/youtube/stream?videoId=${encodeURIComponent(result.id)}`),
-      youtubeVideoId: result.id,
-    };
+    return { youtubeVideoId: result.id };
   }
 }
 
