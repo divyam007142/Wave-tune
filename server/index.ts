@@ -94,16 +94,18 @@ app.get("/api/youtube/search", async (request, response) => {
 
 app.get("/api/youtube/stream", async (request, response) => {
   const videoId = String(request.query.videoId ?? "").trim();
-  if (!videoId) {
-    response.status(400).json({ error: "A YouTube video ID is required." });
+  if (!/^[\w-]{11}$/.test(videoId)) {
+    response.status(400).json({ error: "A valid YouTube video ID is required." });
     return;
   }
 
   try {
-    const playback = await streamYouTube(videoId);
+    const playback = await streamYouTube(videoId, request.header("range"));
+    response.status(playback.status);
     response.setHeader("Content-Type", playback.type);
     response.setHeader("Cache-Control", "no-store");
-    response.setHeader("Accept-Ranges", "bytes");
+    response.setHeader("Accept-Ranges", playback.acceptRanges);
+    if (playback.contentRange) response.setHeader("Content-Range", playback.contentRange);
     if (playback.contentLength) response.setHeader("Content-Length", playback.contentLength);
     playback.stream.pipe(response);
   } catch (error) {
