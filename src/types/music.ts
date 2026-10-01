@@ -29,4 +29,5 @@ export type SearchResult = {
   albums: { id: string; name: string; artist: string; artwork: string }[];
   artists: { id: string; name: string; artwork: string }[];
   playlists: Playlist[];
+  notice?: string;
 };
