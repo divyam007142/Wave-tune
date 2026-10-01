@@ -6,7 +6,7 @@ import { accountRouter } from "./accountRoutes";
 import { isMongoConfigured } from "./database";
 import { getTrendingTracks, searchSpotify } from "./spotifyCatalog";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware, getClerkProxyHost } from "./middlewares/clerkProxyMiddleware";
-import { searchYouTube, streamYouTube } from "./youtube";
+import { searchYouTube } from "./youtube";
 
 const app = express();
 const port = Number(process.env.PORT ?? 5000);
@@ -14,6 +14,7 @@ const allowedOrigins = (process.env.FRONTEND_ORIGIN ?? "")
   .split(",")
   .map((origin) => origin.trim().replace(/\/+$/, ""))
   .filter(Boolean);
+const clerkConfigured = Boolean(process.env.CLERK_SECRET_KEY && process.env.CLERK_PUBLISHABLE_KEY);
 
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
@@ -34,14 +35,18 @@ app.use((request, response, next) => {
 });
 
 app.use(express.json({ limit: "1mb" }));
-app.use(
-  clerkMiddleware((request) => ({
-    publishableKey: publishableKeyFromHost(
-      getClerkProxyHost(request) ?? "",
-      process.env.CLERK_PUBLISHABLE_KEY,
-    ),
-  })),
-);
+if (clerkConfigured) {
+  app.use(
+    clerkMiddleware((request) => ({
+      publishableKey: publishableKeyFromHost(
+        getClerkProxyHost(request) || request.hostname || "localhost",
+        process.env.CLERK_PUBLISHABLE_KEY,
+      ),
+    })),
+  );
+} else {
+  console.warn("Clerk is not configured; public catalog access remains available, but account routes are disabled.");
+}
 
 app.get("/api/health", (_request, response) => {
   response.json({
@@ -49,14 +54,14 @@ app.get("/api/health", (_request, response) => {
     services: {
       mongodbConfigured: isMongoConfigured(),
       spotifyConfigured: Boolean(process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET),
-      authenticationConfigured: Boolean(process.env.CLERK_SECRET_KEY),
+      authenticationConfigured: clerkConfigured,
     },
   });
 });
 
 app.get("/api/catalog/trending", async (_request, response) => {
   try {
-    response.json({ tracks: await getTrendingTracks() });
+    response.json(await getTrendingTracks());
   } catch (error) {
     const message = error instanceof Error ? error.message : "Spotify catalog is unavailable.";
     response.status(502).json({ error: message });
@@ -92,29 +97,13 @@ app.get("/api/youtube/search", async (request, response) => {
   }
 });
 
-app.get("/api/youtube/stream", async (request, response) => {
-  const videoId = String(request.query.videoId ?? "").trim();
-  if (!/^[\w-]{11}$/.test(videoId)) {
-    response.status(400).json({ error: "A valid YouTube video ID is required." });
-    return;
-  }
-
-  try {
-    const playback = await streamYouTube(videoId, request.header("range"));
-    response.status(playback.status);
-    response.setHeader("Content-Type", playback.type);
-    response.setHeader("Cache-Control", "no-store");
-    response.setHeader("Accept-Ranges", playback.acceptRanges);
-    if (playback.contentRange) response.setHeader("Content-Range", playback.contentRange);
-    if (playback.contentLength) response.setHeader("Content-Length", playback.contentLength);
-    playback.stream.pipe(response);
-  } catch (error) {
-    console.error("YouTube stream failed", error);
-    response.status(502).json({ error: "YouTube playback is unavailable." });
-  }
-});
-
-app.use("/api/account", accountRouter);
+if (clerkConfigured) {
+  app.use("/api/account", accountRouter);
+} else {
+  app.use("/api/account", (_request, response) => {
+    response.status(503).json({ error: "Account features are unavailable because Clerk is not configured." });
+  });
+}
 app.use("/api", (_request, response) => {
   response.status(404).json({ error: "That Wave Tune API route does not exist." });
 });
@@ -135,7 +124,11 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
     response.status(503).json({ error: error.message });
     return;
   }
-  console.error("Wave Tune request failed:", error instanceof Error ? error.name : "unknown error");
+  if (process.env.NODE_ENV !== "production" && error instanceof Error) {
+    console.error("Wave Tune request failed:", error.stack ?? error.message);
+  } else {
+    console.error("Wave Tune request failed:", error instanceof Error ? error.name : "unknown error");
+  }
   response.status(500).json({ error: "Wave Tune could not complete that request. Check the service configuration." });
 });
 
