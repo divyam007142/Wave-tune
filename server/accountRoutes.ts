@@ -281,9 +281,10 @@ router.post("/playlists/:playlistId/tracks", requireUser, asyncRoute(async (requ
 router.delete("/playlists/:playlistId", requireUser, asyncRoute(async (request, response) => {
   const userId = userIdFrom(response);
   const users = await collection();
+  const playlistId = String(request.params.playlistId ?? "");
   await users.updateOne(
     { clerkUserId: userId },
-    { $pull: { playlists: { id: request.params.playlistId } }, $set: { updatedAt: new Date() } },
+    { $pull: { playlists: { id: playlistId } }, $set: { updatedAt: new Date() } },
   );
   response.json({ ok: true });
 }));
