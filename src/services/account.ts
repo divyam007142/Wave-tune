@@ -32,6 +32,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const accountService = {
+  syncProfile() {
+    return request<{ ok: true }>("/api/account/sync", { method: "POST" });
+  },
+
   getSnapshot() {
     return request<AccountSnapshot>("/api/account/snapshot");
   },
