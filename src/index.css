@@ -84,11 +84,11 @@ img { display: block; max-width: 100%; }
 .sidebar-playlist:hover { color: var(--ink); background: rgba(255,255,255,.4); }
 .playlist-dot { width: 23px; height: 23px; flex: 0 0 auto; border-radius: 7px; background: linear-gradient(145deg, #d5ccf1, #f1bfc9); background-position: center; background-size: cover; }
 .sidebar-actions { display: grid; gap: 8px; }
-.import-button, .spotify-connect-button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 11px; border-radius: 11px; font-size: 10px; text-align: left; }
+.import-button, .account-action-button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 11px; border-radius: 11px; font-size: 10px; text-align: left; }
 .import-button { color: #7058b7; background: rgba(205, 193, 244, .52); border: 1px solid rgba(124, 103, 193, .08); }
 .import-button:hover { background: rgba(204, 191, 245, .82); }
-.spotify-connect-button { color: #77718f; background: rgba(255,255,255,.35); }
-.spotify-connect-button:hover { color: var(--purple-deep); background: rgba(255,255,255,.7); }
+.account-action-button { color: #77718f; background: rgba(255,255,255,.35); }
+.account-action-button:hover { color: var(--purple-deep); background: rgba(255,255,255,.7); }
 .sidebar-footer { gap: 8px; padding-top: 16px; border-top: 1px solid var(--line); }
 .sidebar-footer > span { min-width: 0; flex: 1; display: grid; gap: 3px; }
 .sidebar-footer strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 700; }
@@ -100,7 +100,7 @@ img { display: block; max-width: 100%; }
 .sidebar-is-collapsed .sidebar { padding-inline: 11px; align-items: center; }
 .sidebar-is-collapsed .logo-wordmark, .sidebar-is-collapsed .nav-label, .sidebar-is-collapsed .nav-item span, .sidebar-is-collapsed .sidebar-playlists, .sidebar-is-collapsed .sidebar-actions span, .sidebar-is-collapsed .sidebar-footer > span, .sidebar-is-collapsed .sidebar-footer > svg { display: none; }
 .sidebar-is-collapsed .nav-item { width: 40px; justify-content: center; padding-inline: 0; }
-.sidebar-is-collapsed .import-button, .sidebar-is-collapsed .spotify-connect-button { width: 40px; justify-content: center; padding-inline: 0; }
+.sidebar-is-collapsed .import-button, .sidebar-is-collapsed .account-action-button { width: 40px; justify-content: center; padding-inline: 0; }
 
 .main-column { min-width: 0; min-height: 100vh; }
 .desktop-toolbar { height: 79px; gap: 18px; padding: 0 38px; }
@@ -145,6 +145,13 @@ img { display: block; max-width: 100%; }
 .toast { position: fixed; z-index: 30; right: 21px; bottom: 94px; display: flex; align-items: center; gap: 7px; max-width: min(360px, calc(100vw - 40px)); padding: 10px 13px; color: white; border-radius: 10px; background: var(--purple); box-shadow: 0 10px 30px rgba(82, 67, 132, .2); font-size: 10px; }.toast-error { color: #9d5d70; background: #f3dce3; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.full-art-wrap.full-art-video { width: 100%; max-width: 480px; min-height: 200px; aspect-ratio: 16 / 9; }
+.youtube-player-shell { position: relative; width: 100%; height: 100%; min-width: 200px; min-height: 200px; overflow: hidden; border: 1px solid #2a3026; border-radius: 16px; background: #070a06; }
+.youtube-player-target { position: absolute; inset: 0; }
+.youtube-player-target iframe { display: block; width: 100%; height: 100%; border: 0; }
+.youtube-pending { display: grid; place-content: center; justify-items: center; gap: 12px; width: 100%; min-height: 220px; border: 1px solid #2a3026; border-radius: 16px; color: #a7ad9e; background: #11150f; font-size: 11px; }
+.youtube-pending p { margin: 0; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; } }
 
@@ -188,7 +195,7 @@ body { background: linear-gradient(135deg, #dce8f8 0%, #e8e2f4 48%, #f4dfe8 100%
 .sidebar-playlist { gap: 7px; padding: 6px 9px; font-size: 9px; }
 .playlist-dot { width: 17px; height: 17px; border-radius: 5px; }
 .sidebar-actions { margin-top: auto; }
-.sidebar-actions .spotify-connect-button { display: none; }
+.sidebar-actions .account-action-button { display: none; }
 .sidebar-actions .import-button { justify-content: center; padding: 8px 6px; color: #62509d; border: 0; border-radius: 7px; background: #c4b0f1; font-size: 9px; }
 .sidebar-actions .import-button svg { width: 12px; height: 12px; }
 .sidebar-footer { display: none; }
@@ -481,8 +488,8 @@ button:focus-visible, input:focus-visible { outline-color: #caff5c; }
 .playlist-dot { background: linear-gradient(145deg, #caff5c, #56742a); }
 .import-button { color: #caff5c; border-color: rgba(202, 255, 92, .16); background: rgba(202, 255, 92, .08); }
 .import-button:hover { background: rgba(202, 255, 92, .14); }
-.spotify-connect-button { color: #bbc4b0; background: rgba(255, 255, 255, .04); }
-.spotify-connect-button:hover { color: #caff5c; background: rgba(202, 255, 92, .08); }
+.account-action-button { color: #bbc4b0; background: rgba(255, 255, 255, .04); }
+.account-action-button:hover { color: #caff5c; background: rgba(202, 255, 92, .08); }
 .sidebar-footer { border-color: var(--line); }
 .sidebar-footer small { color: #89927f; }
 .profile-avatar { color: #11150c; background: #caff5c; }
@@ -620,6 +627,66 @@ button:focus-visible, input:focus-visible { outline-color: #caff5c; }
 .mobile-nav button { color: #88917e; }
 .mobile-nav button.is-active { color: #caff5c; }
 .mobile-menu { color: #edf1e7; }
+.sidebar .nav-item.is-active { color: #caff5c; background: rgba(202, 255, 92, .09); box-shadow: inset 2px 0 #caff5c; }
+.sidebar .nav-item:hover { color: #f1f4eb; background: rgba(255, 255, 255, .045); }
+.sidebar-actions .import-button { color: #caff5c; border: 1px solid rgba(202, 255, 92, .16); background: rgba(202, 255, 92, .08); }
+.sidebar-actions .import-button:hover { background: rgba(202, 255, 92, .14); }
+.artwork-empty { color: #caff5c; background: #192116; }
+.artwork-generated { color: #f1f4eb; }
+.empty-state {
+  color: #f1f4eb;
+  border: 1px solid rgba(214, 231, 187, .12);
+  background: #11160e;
+}
+.empty-state > svg, .search-start-icon { color: #caff5c; background: rgba(202, 255, 92, .09); }
+.home-empty {
+  min-height: min(430px, calc(100vh - 220px));
+  border-radius: 18px;
+  background: radial-gradient(ellipse at center, rgba(202, 255, 92, .035), transparent 62%), #11160e;
+}
+.home-empty .empty-state-brand { margin-bottom: 24px; }
+.home-empty .eyebrow { color: #9da493; }
+.empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 18px; }
+.activity-rail .queue-panel { margin-top: 22px; padding-top: 18px; }
+.queue-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.queue-head h2 { margin-top: 5px; color: #edf1e7; font-size: 17px; letter-spacing: -.04em; }
+.queue-head .text-button { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; }
+.now-playing-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .035);
+}
+.queue-now-art { width: 39px; height: 39px; flex: 0 0 auto; border-radius: 8px; }
+.queue-now-copy { min-width: 0; display: grid; flex: 1; gap: 3px; }
+.queue-now-copy small { color: #8d9782; font: 8px "DM Mono", monospace; letter-spacing: .1em; }
+.queue-now-copy strong, .queue-now-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-now-copy strong { color: #edf1e7; font-size: 10px; }
+.queue-now-copy span { color: #9da493; font-size: 8px; }
+.eq-mark { display: inline-flex; align-items: center; gap: 2px; height: 16px; }
+.eq-mark i { width: 2px; height: 7px; border-radius: 3px; background: #caff5c; }
+.eq-mark i:nth-child(2) { height: 14px; }
+.eq-mark i:nth-child(3) { height: 10px; }
+.queue-list { display: grid; gap: 5px; margin-top: 9px; }
+.queue-item { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 5px 4px; border-bottom: 1px solid var(--line); }
+.queue-number { width: 17px; flex: 0 0 auto; color: #84907a; text-align: center; font: 8px "DM Mono", monospace; }
+.queue-item > button { min-width: 0; display: flex; align-items: center; gap: 8px; flex: 1; padding: 0; color: inherit; background: transparent; text-align: left; }
+.queue-art { width: 31px; height: 31px; flex: 0 0 auto; border-radius: 7px; }
+.queue-item button > span { min-width: 0; display: grid; gap: 3px; }
+.queue-item button strong, .queue-item button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-item button strong { color: #edf1e7; font-size: 9px; }
+.queue-item button small { color: #909a86; font-size: 8px; }
+.queue-item > .icon-button { width: 25px; height: 25px; }
+.queue-empty { display: grid; justify-items: center; gap: 6px; padding: 17px 8px; color: #9da493; text-align: center; }
+.queue-empty p { margin: 0; color: #e3e9dc; font-size: 10px; }
+.queue-empty span { font-size: 8px; line-height: 1.5; }
+.queue-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 9px; padding-top: 9px; color: #909a86; border-top: 1px solid var(--line); font-size: 8px; }
+.queue-footer button { display: flex; align-items: center; gap: 4px; padding: 3px; color: #9da493; background: transparent; font-size: 8px; }
+.queue-footer button:hover { color: #caff5c; }
 
 @media (min-width: 761px) {
   .app-shell { grid-template-columns: clamp(205px, 18vw, 280px) minmax(0, 1fr) clamp(265px, 22vw, 350px); }
@@ -675,7 +742,7 @@ button:focus-visible, input:focus-visible { outline-color: #caff5c; }
   .mobile-drawer { width: min(84vw, 310px); height: 100%; padding-top: 16px; }
   .mobile-drawer .sidebar { display: flex; height: calc(100% - 70px); min-height: 0; padding: 0 18px 18px; border: 0; background: transparent; }
   .mobile-drawer .sidebar-top { display: none; }
-  .mobile-drawer .sidebar-actions .spotify-connect-button { display: flex; }
+  .mobile-drawer .sidebar-actions .account-action-button { display: flex; }
   .mobile-drawer .sidebar-footer { display: flex; }
   .mobile-drawer .sidebar-playlists { min-height: 100px; }
   .mobile-drawer .sidebar-playlist-head { display: flex; }
