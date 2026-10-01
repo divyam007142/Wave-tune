@@ -17,6 +17,7 @@ type PlayerProviderProps = {
   isAuthenticated?: boolean;
   onRequireAuth?: () => void;
   onPlaybackEvent?: (track: Track, seconds: number) => void;
+  onLikeEvent?: (track: Track) => void;
 };
 type RepeatMode = "off" | "all" | "one";
 type PlayerContextValue = {
@@ -41,6 +42,7 @@ type PlayerContextValue = {
   setVolume: (value: number) => void;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
+  syncLikedIds: (ids: string[]) => void;
   addToQueue: (track: Track) => void;
   playNext: (track: Track) => void;
   removeFromQueue: (id: string) => void;
@@ -56,7 +58,7 @@ function formatImportedName(name: string) {
   return name.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").trim() || "Untitled track";
 }
 
-export function PlayerProvider({ children, isAuthenticated = false, onRequireAuth, onPlaybackEvent }: PlayerProviderProps) {
+export function PlayerProvider({ children, isAuthenticated = false, onRequireAuth, onPlaybackEvent, onLikeEvent }: PlayerProviderProps) {
   const [library, setLibrary] = useState<Track[]>([]);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queue, setQueue] = useState<Track[]>([]);
@@ -77,11 +79,19 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const authRef = useRef(isAuthenticated);
   const requireAuthRef = useRef(onRequireAuth);
   const playbackEventRef = useRef(onPlaybackEvent);
+  const likeEventRef = useRef(onLikeEvent);
+  const currentTrackRef = useRef(currentTrack);
   const lastReportedTimeRef = useRef(0);
   authRef.current = isAuthenticated;
   requireAuthRef.current = onRequireAuth;
   playbackEventRef.current = onPlaybackEvent;
+  likeEventRef.current = onLikeEvent;
+  currentTrackRef.current = currentTrack;
   repeatRef.current = repeat;
+
+  useEffect(() => {
+    setLikedIds(isAuthenticated ? [] : readStored("liked", []));
+  }, [isAuthenticated]);
 
   useEffect(() => {
     loadLocalTracks().then(setLibrary).catch((error) => console.warn("Wave Tune library unavailable", error));
@@ -92,8 +102,8 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     const onTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
       const delta = audio.currentTime - lastReportedTimeRef.current;
-      if (delta >= 15 && currentTrack) {
-        playbackEventRef.current?.(currentTrack, delta);
+      if (delta >= 15 && currentTrackRef.current) {
+        playbackEventRef.current?.(currentTrackRef.current, delta);
         lastReportedTimeRef.current = audio.currentTime;
       }
     };
@@ -293,10 +303,12 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const toggleLike = (track: Track) => {
     setLikedIds((items) => {
       const next = items.includes(track.id) ? items.filter((id) => id !== track.id) : [track.id, ...items];
-      writeStored("liked", next);
+      if (authRef.current) likeEventRef.current?.(track);
+      else writeStored("liked", next);
       return next;
     });
   };
+  const syncLikedIds = useCallback((ids: string[]) => setLikedIds([...new Set(ids)]), []);
 
   const importFiles = async (files: FileList | File[]) => {
     const imported = await Promise.all(
@@ -332,9 +344,9 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       currentTrack, isPlaying, isLoading, currentTime, duration, volume, queue, library,
       likedIds, recentlyPlayed, shuffle, repeat, playbackError, playTrack, togglePlay, next,
       previous, seek, setVolume, toggleShuffle, cycleRepeat, addToQueue, playNext, removeFromQueue,
-      clearQueue, toggleLike, importFiles, clearLibrary,
+      clearQueue, toggleLike, syncLikedIds, importFiles, clearLibrary,
     }),
-    [currentTrack, isPlaying, isLoading, currentTime, duration, volume, queue, library, likedIds, recentlyPlayed, shuffle, repeat, playbackError, playTrack, togglePlay, next, previous],
+    [currentTrack, isPlaying, isLoading, currentTime, duration, volume, queue, library, likedIds, recentlyPlayed, shuffle, repeat, playbackError, playTrack, togglePlay, next, previous, syncLikedIds],
   );
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
