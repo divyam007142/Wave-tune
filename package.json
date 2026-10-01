@@ -4,9 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx server/index.ts",
-    "build": "tsc -b && vite build",
-    "preview": "NODE_ENV=production tsx server/index.ts"
+    "dev": "node --env-file-if-exists=.env --import tsx server/index.ts",
+    "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
+    "preview": "node --env-file-if-exists=.env --import tsx server/preview.ts"
   },
   "keywords": [],
   "author": "",
