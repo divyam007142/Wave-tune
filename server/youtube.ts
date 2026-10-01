@@ -14,13 +14,14 @@ export async function searchYouTube(query: string): Promise<YouTubeResult[]> {
     source: { youtube: "video" },
   });
 
-  return results
-    .filter((result) => result.type === "video" && Boolean(result.id && result.title && result.url))
-    .map((result) => ({
+  return results.flatMap((result) => {
+    if (result.type !== "video" || !result.id || !result.title || !result.url) return [];
+    return [{
       id: result.id,
       title: result.title,
       url: result.url,
       duration: result.durationInSec ?? 0,
       artwork: result.thumbnails?.[0]?.url ?? "",
-    }));
+    }];
+  });
 }
