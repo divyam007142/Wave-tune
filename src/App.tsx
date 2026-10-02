@@ -6,10 +6,9 @@ import {
   Trash2, Upload, UserRound, Volume2, VolumeX, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ClerkProvider, SignIn, SignUp, useAuth, useClerk, useUser } from "@clerk/react";
-import { publishableKeyFromHost } from "@clerk/react/internal";
-import { dark } from "@clerk/themes";
 import { Redirect, Route, Router, Switch, useLocation } from "wouter";
+import { AuthModal } from "./components/AuthModal";
+import { AuthProvider, useAuth } from "./context/AuthContext";
 import { usePlayer } from "./context/PlayerContext";
 import { PlayerProvider } from "./context/PlayerContext";
 import { accountService, type AccountSnapshot, type AppProfile } from "./services/account";
@@ -18,54 +17,6 @@ import type { Playlist, SearchResult, Track } from "./types/music";
 
 type View = "home" | "search" | "library" | "liked" | "recent" | "playlists" | "settings";
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-const clerkPubKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
-
-const clerkAppearance = {
-  theme: dark,
-  cssLayerName: "clerk",
-  options: {
-    logoPlacement: "inside" as const,
-    logoLinkUrl: basePath || "/",
-    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
-    socialButtonsPlacement: "top" as const,
-    socialButtonsVariant: "blockButton" as const,
-  },
-  variables: {
-    colorPrimary: "#caff5c",
-    colorForeground: "#f4f6ee",
-    colorMutedForeground: "#9da493",
-    colorDanger: "#ff7a85",
-    colorBackground: "#11150f",
-    colorInput: "#171d15",
-    colorInputForeground: "#f4f6ee",
-    colorNeutral: "#30382d",
-    fontFamily: "Manrope, sans-serif",
-    borderRadius: "12px",
-  },
-  elements: {
-    rootBox: { width: "100%", display: "flex", justifyContent: "center" },
-    cardBox: { width: "440px", maxWidth: "100%", background: "#11150f", borderRadius: "18px" },
-    card: { boxShadow: "none", border: "1px solid #283025", background: "transparent" },
-    footer: { boxShadow: "none", border: "0", background: "transparent" },
-    headerTitle: { color: "#f4f6ee", fontWeight: 700 },
-    headerSubtitle: { color: "#9da493" },
-    socialButtonsBlockButtonText: { color: "#f4f6ee", fontWeight: 600 },
-    formFieldLabel: { color: "#e6eadf" },
-    formFieldInput: { color: "#f4f6ee", background: "#171d15", borderColor: "#30382d" },
-    formButtonPrimary: { color: "#10140e", background: "#caff5c", fontWeight: 800 },
-    footerActionLink: { color: "#caff5c" },
-    footerActionText: { color: "#9da493" },
-    dividerText: { color: "#899182" },
-  },
-};
-
-if (!clerkPubKey) {
-  throw new Error("Wave Tune sign-in is not configured. Set VITE_CLERK_PUBLISHABLE_KEY for the frontend build.");
-}
 
 function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return "0:00";
@@ -130,7 +81,7 @@ function Sidebar({ activeView, onNavigate, collapsed, setCollapsed, onImport, pr
     <div className="sidebar-top"><WaveLogo compact={collapsed} /><span className="reference-brand">Wave Tune</span><IconButton label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => setCollapsed(!collapsed)}>{collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}</IconButton></div>
     <nav className="sidebar-nav" aria-label="Primary navigation"><span className="nav-label">Recommend</span>{[{ id: "home" as View, label: "For you", icon: Home }, { id: "search" as View, label: "Discover", icon: Search }, { id: "library" as View, label: "Library", icon: Library }, { id: "recent" as View, label: "Recently played", icon: Clock3 }].map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? "is-active" : ""}`} onClick={() => onNavigate(id)} title={collapsed ? label : undefined}><Icon size={15} /><span>{label}</span></button>)}<span className="nav-label sidebar-sub-label">My music</span>{[{ id: "liked" as View, label: "Liked songs", icon: Heart }, { id: "playlists" as View, label: "Playlists", icon: ListMusic }, { id: "settings" as View, label: "Settings", icon: Settings2 }].map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? "is-active" : ""}`} onClick={() => onNavigate(id)}><Icon size={15} /><span>{label}</span></button>)}</nav>
     <div className="sidebar-playlists"><div className="sidebar-playlist-head"><span className="nav-label">Playlists</span><IconButton label="Open playlists" onClick={() => onNavigate("playlists")}><Plus size={16} /></IconButton></div>{playlists.slice(0, 3).map((playlist) => <button className="sidebar-playlist" key={playlist.id} onClick={() => onNavigate("playlists")}><span className="playlist-dot" style={{ backgroundImage: playlist.artwork ? `url(${playlist.artwork})` : undefined }} /><span>{playlist.name}</span></button>)}</div>
-    <div className="sidebar-actions"><button className="import-button" onClick={onImport}><Upload size={16} /><span>Import music</span></button>{profile ? <button className="spotify-connect-button" onClick={onLogout}><LogOut size={15} /><span>Sign out</span></button> : <button className="spotify-connect-button" onClick={onLogin}><LogIn size={15} /><span>Log in with Google</span></button>}</div>
+    <div className="sidebar-actions"><button className="import-button" onClick={onImport}><Upload size={16} /><span>Import music</span></button>{profile ? <button className="spotify-connect-button" onClick={onLogout}><LogOut size={15} /><span>Sign out</span></button> : <button className="spotify-connect-button" onClick={onLogin}><LogIn size={15} /><span>Log in</span></button>}</div>
     <div className="sidebar-footer">{profile?.image ? <img className="profile-avatar-image" src={profile.image} alt="" /> : <div className="profile-avatar">{profile ? profile.name.slice(0, 2).toUpperCase() : "WT"}</div>}<span><strong>{profile?.name ?? "Guest listener"}</strong><small>{profile ? `${Math.round(profile.totalListeningSeconds / 60)} min listened` : "Five songs free"}</small></span><MoreHorizontal size={16} /></div>
   </aside>;
 }
@@ -154,16 +105,33 @@ function SearchView({ onAddToPlaylist }: { onAddToPlaylist: (track: Track) => vo
   useEffect(() => {
     if (!query.trim()) { setResults(null); setLoading(false); return; }
     let active = true;
+    const controller = new AbortController();
+    setResults(null);
     const timer = window.setTimeout(() => {
       setLoading(true);
-      catalogService.search(query)
+      catalogService.search(query, controller.signal)
         .then((result) => { if (active) setResults(result); })
         .catch((e) => { if (active) setError(e instanceof Error ? e.message : "Search is unavailable."); })
         .finally(() => { if (active) setLoading(false); });
     }, 300);
-    return () => { active = false; window.clearTimeout(timer); };
+    return () => { active = false; controller.abort(); window.clearTimeout(timer); };
   }, [query]);
-  return <div className="page search-page"><div className="search-heading"><span className="eyebrow">LIVE CATALOG</span><h1>Find your next song.</h1><p>Search real catalog results, then press play to start a Wave Tune session.</p></div><div className="search-input-wrap"><Search size={19} /><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setError(null); }} placeholder="Search songs, artists, or moods..." /><kbd>⌘ K</kbd>{query && <button onClick={() => setQuery("")} aria-label="Clear search"><X size={16} /></button>}</div>{loading && <div className="skeleton-stack">{[1, 2, 3, 4].map((item) => <div className="skeleton-row" key={item}><span /><i /><b /><em /></div>)}</div>}{error && <div className="empty-state"><Music2 size={24} /><h2>Search is unavailable</h2><p>{error}</p></div>}{!loading && !error && query && !results?.tracks.length && <div className="empty-state"><Search size={24} /><h2>Nothing found</h2><p>Try a different artist, track, or mood.</p></div>}{!loading && results?.tracks.length ? <div className="search-results"><SectionHeader eyebrow="TRACKS" title={`${results.tracks.length} results`} /><div className="track-list">{results.tracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={results.tracks} onAddToPlaylist={onAddToPlaylist} />)}</div></div> : !query && <div className="search-start"><div className="search-start-icon"><Search size={25} /></div><h2>Search the catalog</h2><p>Start with a song, artist, or mood.</p><div className="search-suggestions"><button onClick={() => setQuery("The Weeknd")}>The Weeknd</button><button onClick={() => setQuery("lofi beats")}>lofi beats</button><button onClick={() => setQuery("Billie Eilish")}>Billie Eilish</button></div></div>}</div>;
+  const hasResults = Boolean(results && (results.tracks.length || results.albums.length || results.artists.length || results.playlists.length));
+  return <div className="page search-page">
+    <div className="search-heading"><span className="eyebrow">LIVE CATALOG</span><h1>Find your next song.</h1><p>Search real catalog results, then press play to start a Wave Tune session.</p></div>
+    <div className="search-input-wrap"><Search size={19} /><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setError(null); }} placeholder="Search songs, artists, or moods..." /><kbd>⌘ K</kbd>{query && <button onClick={() => setQuery("")} aria-label="Clear search"><X size={16} /></button>}</div>
+    {loading && <div className="skeleton-stack">{[1, 2, 3, 4].map((item) => <div className="skeleton-row" key={item}><span /><i /><b /><em /></div>)}</div>}
+    {error && <div className="empty-state"><Music2 size={24} /><h2>Search is unavailable</h2><p>{error}</p></div>}
+    {!loading && !error && query && !hasResults && <div className="empty-state"><Search size={24} /><h2>Nothing found</h2><p>Try a different artist, track, or mood.</p></div>}
+    {!loading && results?.notice && <p className="catalog-notice">{results.notice}</p>}
+    {!loading && results?.tracks.length ? <div className="search-results"><SectionHeader eyebrow="TRACKS" title={`${results.tracks.length} results`} /><div className="track-list">{results.tracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={results.tracks} onAddToPlaylist={onAddToPlaylist} />)}</div></div> : null}
+    {!loading && results && Boolean(results.albums.length || results.artists.length || results.playlists.length) && <div className="search-collections">
+      {Boolean(results.albums.length) && <section className="search-collection"><SectionHeader eyebrow="ALBUMS" title="Catalog albums" /><div className="search-entity-grid">{results.albums.map((album) => <article className="search-entity" key={album.id}>{album.artwork ? <img src={album.artwork} alt="" loading="lazy" /> : <div className="search-entity-art"><Music2 size={18} /></div>}<span><strong>{album.name}</strong><small>{album.artist}</small></span></article>)}</div></section>}
+      {Boolean(results.artists.length) && <section className="search-collection"><SectionHeader eyebrow="ARTISTS" title="Artists" /><div className="search-entity-grid">{results.artists.map((artist) => <article className="search-entity" key={artist.id}>{artist.artwork ? <img src={artist.artwork} alt="" loading="lazy" /> : <div className="search-entity-art"><UserRound size={18} /></div>}<span><strong>{artist.name}</strong><small>Artist</small></span></article>)}</div></section>}
+      {Boolean(results.playlists.length) && <section className="search-collection"><SectionHeader eyebrow="PLAYLISTS" title="Catalog playlists" /><div className="search-entity-grid">{results.playlists.map((playlist) => <article className="search-entity" key={playlist.id}><PlaylistArtwork playlist={playlist} /><span><strong>{playlist.name}</strong><small>{playlist.description || "Playlist"}</small></span></article>)}</div></section>}
+    </div>}
+    {!query && <div className="search-start"><div className="search-start-icon"><Search size={25} /></div><h2>Search the catalog</h2><p>Start with a song, artist, or mood.</p><div className="search-suggestions"><button onClick={() => setQuery("The Weeknd")}>The Weeknd</button><button onClick={() => setQuery("lofi beats")}>lofi beats</button><button onClick={() => setQuery("Billie Eilish")}>Billie Eilish</button></div></div>}
+  </div>;
 }
 
 function QueuePanel() {
@@ -246,15 +214,27 @@ function CreatePlaylist({ onClose, onCreated }: { onClose: () => void; onCreated
 }
 
 function PlayerServices({ children }: { children: ReactNode }) {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoading, isAuthenticated } = useAuth();
+  const isSignedIn = isAuthenticated;
   const [, setLocation] = useLocation();
+  const playbackRetryAfter = useRef(0);
+  const playbackErrorShown = useRef(false);
   const savePlayback = useCallback((track: Track, seconds: number) => {
-    if (!isSignedIn) return;
+    if (!isSignedIn || Date.now() < playbackRetryAfter.current) return;
     void accountService.savePlayback(track, seconds)
-      .then(() => window.dispatchEvent(new Event("wave-tune:account-refresh")))
-      .catch((error) => window.dispatchEvent(new CustomEvent("wave-tune:account-error", {
-        detail: error instanceof Error ? error.message : "Account activity could not be saved.",
-      })));
+      .then(() => {
+        playbackRetryAfter.current = 0;
+        playbackErrorShown.current = false;
+        window.dispatchEvent(new Event("wave-tune:account-refresh"));
+      })
+      .catch((error) => {
+        playbackRetryAfter.current = Date.now() + 60_000;
+        if (playbackErrorShown.current) return;
+        playbackErrorShown.current = true;
+        window.dispatchEvent(new CustomEvent("wave-tune:account-error", {
+          detail: error instanceof Error ? error.message : "Account activity could not be saved.",
+        }));
+      });
   }, [isSignedIn]);
   const saveLike = useCallback((track: Track) => {
     if (!isSignedIn) return;
@@ -265,7 +245,7 @@ function PlayerServices({ children }: { children: ReactNode }) {
       })));
   }, [isSignedIn]);
   return <PlayerProvider
-    isAuthenticated={Boolean(isLoaded && isSignedIn)}
+    isAuthenticated={Boolean(!isLoading && isAuthenticated)}
     onRequireAuth={() => setLocation("/sign-in")}
     onPlaybackEvent={savePlayback}
     onLikeEvent={saveLike}
@@ -273,10 +253,8 @@ function PlayerServices({ children }: { children: ReactNode }) {
 }
 
 function AuthenticatedApp() {
-  const { isSignedIn } = useAuth();
-  const { user } = useUser();
-  const { signOut } = useClerk();
-  const [, setLocation] = useLocation();
+  const { user, isLoading, isAuthenticated: isSignedIn, logout: signOut } = useAuth();
+  const [location, setLocation] = useLocation();
   const reduceMotion = useReducedMotion();
   const player = usePlayer();
   const [account, setAccount] = useState<AccountSnapshot | null>(null);
@@ -304,6 +282,7 @@ function AuthenticatedApp() {
   useEffect(() => { void loadCatalog(); }, [loadCatalog]);
 
   const loadAccount = useCallback(() => {
+    if (isLoading) return;
     if (!isSignedIn) {
       setAccount(null);
       return;
@@ -311,16 +290,8 @@ function AuthenticatedApp() {
     accountService.getSnapshot()
       .then(setAccount)
       .catch((error) => setToast(error instanceof Error ? error.message : "Account storage is unavailable."));
-  }, [isSignedIn]);
-  useEffect(() => {
-    if (!isSignedIn) {
-      void loadAccount();
-      return;
-    }
-    accountService.syncProfile()
-      .then(() => loadAccount())
-      .catch((error) => setToast(error instanceof Error ? error.message : "Your verified profile could not be synced."));
-  }, [isSignedIn, loadAccount]);
+  }, [isLoading, isSignedIn]);
+  useEffect(() => { void loadAccount(); }, [loadAccount]);
   useEffect(() => {
     const refresh = () => { void loadAccount(); };
     const showError = (event: Event) => {
@@ -340,9 +311,9 @@ function AuthenticatedApp() {
 
   const profile = account?.profile ?? (isSignedIn && user ? {
     id: user.id,
-    name: user.fullName || user.username || "Wave Tune listener",
-    email: user.primaryEmailAddress?.emailAddress,
-    image: user.imageUrl,
+    name: user.name,
+    email: user.email,
+    image: user.image,
     totalListeningSeconds: 0,
   } : undefined);
   const playlists = account?.playlists ?? [];
@@ -361,7 +332,21 @@ function AuthenticatedApp() {
     setMobileMenuOpen(false);
   }, []);
   const login = useCallback(() => setLocation("/sign-in"), [setLocation]);
-  const logout = useCallback(() => { void signOut({ redirectUrl: basePath || "/" }); }, [signOut]);
+  const logout = useCallback(async () => {
+    try {
+      await signOut();
+      setAccount(null);
+      setLocation("/");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not sign out.");
+    }
+  }, [setLocation, signOut]);
+  const authModalOpen = location.startsWith("/sign-in") || location.startsWith("/sign-up");
+  const closeAuthModal = useCallback(() => setLocation("/"), [setLocation]);
+  const finishAuth = useCallback(() => {
+    setLocation("/");
+    setToast("You are signed in to Wave Tune.");
+  }, [setLocation]);
   const importFiles = async (files: FileList | File[]) => {
     const count = Array.from(files).filter((file) => file.type.startsWith("audio/")).length;
     try {
@@ -427,7 +412,7 @@ function AuthenticatedApp() {
       page = <div className="page"><div className="page-heading split-heading"><div><span className="eyebrow">YOUR COLLECTION</span><h1>Playlists</h1><p>Make space for whatever the day calls for.</p></div><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={15} /> New playlist</button></div>{playlists.length ? <div className="playlist-grid">{playlists.map((playlist) => <motion.button key={playlist.id} className="playlist-card" whileHover={{ y: -4 }} onClick={() => setSelectedPlaylist(playlist)}><PlaylistArtwork playlist={playlist} /><span><strong>{playlist.name}</strong><small>{playlist.description}</small></span><ArrowRight size={15} /></motion.button>)}</div> : <div className="empty-state"><ListMusic size={24} /><h2>Create your first playlist</h2><p>Save live catalog tracks into a private MongoDB-backed collection.</p><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={14} /> New playlist</button></div>}</div>;
       break;
     case "settings":
-      page = <div className="page settings-page"><div className="page-heading"><span className="eyebrow">MAKE IT YOURS</span><h1>Settings</h1><p>Manage your account and playback space.</p></div><div className="settings-groups"><section className="settings-group"><div className="settings-group-head"><UserRound size={17} /><div><h2>Wave Tune account</h2><p>Sign-in is managed securely by Clerk. Wave Tune stores your app profile, never provider passwords.</p></div></div><div className="setting-line"><span><strong>{profile ? `Signed in as ${profile.name}` : "You are listening as a guest"}</strong><small>{profile ? `${Math.round(profile.totalListeningSeconds / 60)} minutes listened` : "The first five songs are free."}</small></span>{profile ? <button className="secondary-button" onClick={logout}><LogOut size={14} /> Sign out</button> : <button className="primary-button" onClick={login}><LogIn size={14} /> Log in with Google</button>}</div></section><section className="settings-group"><div className="settings-group-head"><SlidersHorizontal size={17} /><div><h2>Playback</h2><p>Browser audio with a live music source.</p></div></div><div className="setting-line"><span><strong>Guest access</strong><small>Play five unique songs before sign-in is required.</small></span><span className="setting-value">5 songs</span></div></section></div></div>;
+      page = <div className="page settings-page"><div className="page-heading"><span className="eyebrow">MAKE IT YOURS</span><h1>Settings</h1><p>Manage your account and playback space.</p></div><div className="settings-groups"><section className="settings-group"><div className="settings-group-head"><UserRound size={17} /><div><h2>Wave Tune account</h2><p>Your account and saved music are stored in MongoDB.</p></div></div><div className="setting-line"><span><strong>{profile ? `Signed in as ${profile.name}` : "You are listening as a guest"}</strong><small>{profile ? `${Math.round(profile.totalListeningSeconds / 60)} minutes listened` : "The first five songs are free."}</small></span>{profile ? <button className="secondary-button" onClick={logout}><LogOut size={14} /> Sign out</button> : <button className="primary-button" onClick={login}><LogIn size={14} /> Log in</button>}</div></section><section className="settings-group"><div className="settings-group-head"><SlidersHorizontal size={17} /><div><h2>Playback</h2><p>Browser audio with a live music source.</p></div></div><div className="setting-line"><span><strong>Guest access</strong><small>Play five unique songs before sign-in is required.</small></span><span className="setting-value">5 songs</span></div></section></div></div>;
       break;
   }
 
@@ -458,6 +443,7 @@ function AuthenticatedApp() {
       {addTrack && <PlaylistPicker track={addTrack} playlists={playlists} onClose={() => setAddTrack(null)} onAdded={(playlist) => { setSelectedPlaylist((current) => current?.id === playlist.id ? playlist : current); setAddTrack(null); void loadAccount(); setToast(`Added to ${playlist.name}.`); }} onCreate={() => { setAddTrack(null); setCreatePlaylist(true); }} />}
       {createPlaylist && <CreatePlaylist onClose={() => setCreatePlaylist(false)} onCreated={(playlist) => { setCreatePlaylist(false); void loadAccount(); setToast(`${playlist.name} created.`); }} />}
     </AnimatePresence>
+    {authModalOpen && <AuthModal onClose={closeAuthModal} onSuccess={finishAuth} />}
   </div>;
 }
 
@@ -465,35 +451,19 @@ function MobileNav({ activeView, onNavigate }: { activeView: View; onNavigate: (
   return <nav className="mobile-nav" aria-label="Mobile navigation">{[{ id: "home" as View, label: "Home", icon: Home }, { id: "search" as View, label: "Search", icon: Search }, { id: "library" as View, label: "Library", icon: Library }, { id: "playlists" as View, label: "Playlists", icon: ListMusic }].map(({ id, label, icon: Icon }) => <button key={id} className={activeView === id ? "is-active" : ""} onClick={() => onNavigate(id)}><Icon size={19} /><span>{label}</span></button>)}</nav>;
 }
 
-function ClerkProviderWithRoutes() {
-  const [, setLocation] = useLocation();
-  const stripBase = (path: string) => basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length) || "/"
-    : path;
-  return <ClerkProvider
-    publishableKey={clerkPubKey}
-    proxyUrl={clerkProxyUrl}
-    appearance={clerkAppearance}
-    signInUrl={`${basePath}/sign-in`}
-    signUpUrl={`${basePath}/sign-up`}
-    localization={{
-      signIn: { start: { title: "Welcome back", subtitle: "Sign in to continue listening" } },
-      signUp: { start: { title: "Join Wave Tune", subtitle: "Create your personal music space" } },
-    }}
-    routerPush={(to) => setLocation(stripBase(to))}
-    routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-  >
+function AppRoutes() {
+  return (
     <PlayerServices>
       <Switch>
-        <Route path="/sign-in/*?"><div className="auth-page"><SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} /></div></Route>
-        <Route path="/sign-up/*?"><div className="auth-page"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} /></div></Route>
+        <Route path="/sign-in/*?"><AuthenticatedApp /></Route>
+        <Route path="/sign-up/*?"><AuthenticatedApp /></Route>
         <Route path="/"><AuthenticatedApp /></Route>
         <Route><Redirect to="/" /></Route>
       </Switch>
     </PlayerServices>
-  </ClerkProvider>;
+  );
 }
 
 export default function App() {
-  return <Router base={basePath}><ClerkProviderWithRoutes /></Router>;
+  return <AuthProvider><Router base={basePath}><AppRoutes /></Router></AuthProvider>;
 }
