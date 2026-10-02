@@ -10,7 +10,7 @@ import {
 } from "react";
 import { clearLocalTracks, loadLocalTracks, readStored, saveLocalTrack, writeStored } from "../services/storage";
 import { youtubePlaybackProvider } from "../services/youtube";
-import type { YouTubeIframePlayer } from "../services/youtubeIframe";
+import type { YouTubeIframePlayer } from "../services/youtubelframe";
 import type { Track } from "../types/music";
 
 type PlayerProviderProps = {
