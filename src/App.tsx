@@ -424,7 +424,7 @@ function AuthenticatedApp() {
     onAddToPlaylist={addToPlaylist}
   /> : page;
 
-  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""}`}>
+  return <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""} ${authModalOpen ? "auth-modal-open" : ""}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" />
     <Sidebar activeView={activeView} onNavigate={navigate} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} onImport={() => fileInputRef.current?.click()} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} />
     <main className="main-column">
