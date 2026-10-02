@@ -1,32 +1,74 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 
-const googleErrors: Record<string, string> = {
-  google_not_configured: "Google sign-in is not configured yet.",
-  google_unavailable: "Google sign-in is temporarily unavailable. Try again.",
-  google_failed: "Google sign-in could not be completed. Try again.",
+type GoogleCredentialResponse = { credential?: string };
+
+type GoogleIdentityApi = {
+  initialize: (options: {
+    client_id: string;
+    nonce: string;
+    ux_mode: "popup";
+    callback: (response: GoogleCredentialResponse) => void;
+  }) => void;
+  renderButton: (
+    parent: HTMLElement,
+    options: {
+      theme: "outline";
+      size: "large";
+      type: "standard";
+      text: "continue_with";
+      shape: "rectangular";
+      logo_alignment: "left";
+      width: number;
+    },
+  ) => void;
+  cancel?: () => void;
 };
 
+declare global {
+  interface Window {
+    google?: { accounts: { id: GoogleIdentityApi } };
+  }
+}
+
+let googleIdentityScript: Promise<void> | undefined;
+
+function loadGoogleIdentityScript() {
+  if (window.google?.accounts.id) return Promise.resolve();
+  if (googleIdentityScript) return googleIdentityScript;
+
+  googleIdentityScript = new Promise<void>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => window.google?.accounts.id
+      ? resolve()
+      : reject(new Error("Google sign-in could not be loaded. Try again."));
+    script.onerror = () => {
+      script.remove();
+      googleIdentityScript = undefined;
+      reject(new Error("Google sign-in could not be loaded. Try again."));
+    };
+    document.head.append(script);
+  });
+  return googleIdentityScript;
+}
+
 export function AuthModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
-  const [location, setLocation] = useLocation();
-  const { login, register } = useAuth();
-  const mode = location.startsWith("/sign-up") ? "register" : "login";
-  const [name, setName] = useState("");
+  const { signInWithGoogle, signInWithPassword, registerWithPassword } = useAuth();
+  const [mode, setMode] = useState<"signin" | "register">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const nameInput = useRef<HTMLInputElement>(null);
-  const emailInput = useRef<HTMLInputElement>(null);
+  const [busyAction, setBusyAction] = useState<"google" | "password" | null>(null);
+  const busy = busyAction !== null;
+  const googleButton = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    (mode === "register" ? nameInput : emailInput).current?.focus();
-    const queryError = new URLSearchParams(window.location.search).get("auth_error");
-    if (queryError) setError(googleErrors[queryError] ?? "Sign-in could not be completed.");
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
@@ -35,123 +77,207 @@ export function AuthModal({ onClose, onSuccess }: { onClose: () => void; onSucce
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [mode, onClose]);
+  }, [onClose]);
 
-  const switchMode = () => {
-    setError("");
-    setPassword("");
-    setLocation(mode === "login" ? "/sign-up" : "/sign-in");
-  };
+  useEffect(() => {
+    let active = true;
+    const initializeGoogleSignIn = async () => {
+      try {
+        const configResponse = await fetch("/api/auth/google/config", { credentials: "same-origin" });
+        const config = await configResponse.json().catch(() => ({})) as {
+          clientId?: string;
+          nonce?: string;
+          error?: string;
+        };
+        if (!configResponse.ok || !config.clientId || !config.nonce) {
+          throw new Error(config.error || "Google sign-in could not be configured.");
+        }
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError("");
-    setBusy(true);
-    try {
-      if (mode === "login") await login(email, password);
-      else await register(name, email, password);
-      onSuccess();
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Could not sign in.");
-    } finally {
-      setBusy(false);
-    }
-  };
+        await loadGoogleIdentityScript();
+        if (!active || !googleButton.current || !window.google) return;
+
+        const buttonContainer = googleButton.current;
+        window.google.accounts.id.initialize({
+          client_id: config.clientId,
+          nonce: config.nonce,
+          ux_mode: "popup",
+          callback: (credentialResponse) => {
+            if (!active) return;
+            if (!credentialResponse.credential) {
+              setError("Google did not return a verified account. Try again.");
+              return;
+            }
+            setError("");
+            setBusyAction("google");
+            void signInWithGoogle(credentialResponse.credential)
+              .then(() => {
+                if (active) onSuccess();
+              })
+              .catch((requestError: unknown) => {
+                if (active) {
+                  setError(requestError instanceof Error ? requestError.message : "Could not sign in with Google.");
+                }
+              })
+              .finally(() => {
+                if (active) setBusyAction(null);
+              });
+          },
+        });
+        buttonContainer.replaceChildren();
+        window.google.accounts.id.renderButton(buttonContainer, {
+          theme: "outline",
+          size: "large",
+          type: "standard",
+          text: "continue_with",
+          shape: "rectangular",
+          logo_alignment: "left",
+          width: Math.min(400, Math.max(200, Math.floor(buttonContainer.clientWidth))),
+        });
+      } catch (requestError) {
+        if (active) {
+          googleButton.current?.classList.add("is-unavailable");
+          setError(requestError instanceof Error ? requestError.message : "Google sign-in is unavailable.");
+        }
+      }
+    };
+
+    void initializeGoogleSignIn();
+    return () => {
+      active = false;
+      window.google?.accounts.id.cancel?.();
+    };
+  }, [onSuccess, signInWithGoogle]);
 
   const onBackdropClick = (event: MouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) onClose();
   };
 
+  const switchMode = (nextMode: "signin" | "register") => {
+    setMode(nextMode);
+    setError("");
+    setPassword("");
+  };
+
+  const handlePasswordSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (busy) return;
+    if (mode === "register" && password.length < 12) {
+      setError("Use a password that is at least 12 characters long.");
+      return;
+    }
+
+    setError("");
+    setBusyAction("password");
+    try {
+      if (mode === "register") {
+        await registerWithPassword(email.trim(), password);
+      } else {
+        await signInWithPassword(email.trim(), password);
+      }
+      onSuccess();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "We couldn't complete your request. Please try again.");
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   return createPortal(
     <div className="auth-modal-backdrop" onMouseDown={onBackdropClick}>
-      <section className="auth-modal-card" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
-        <button className="auth-modal-close" type="button" onClick={onClose} aria-label="Close sign-in">
+      <section
+        className="auth-modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="auth-modal-title"
+        aria-busy={busy}
+      >
+        <button className="auth-modal-close" type="button" onClick={onClose} aria-label="Close sign-in dialog">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg>
         </button>
-        <div className="auth-modal-brand" aria-hidden="true">
-          <span className="auth-modal-mark"><i /><i /><i /><i /></span>
-          <span className="auth-modal-wordmark">WAVE <b>TUNE</b></span>
-          <span className="auth-modal-brand-note">PERSONAL RADIO</span>
-        </div>
-        <h1 id="auth-modal-title">{mode === "login" ? "WELCOME BACK" : "CREATE ACCOUNT"}</h1>
+        <div className="auth-modal-kicker">Wave Tune <span>·</span> Personal radio</div>
+        <h1 id="auth-modal-title">{mode === "signin" ? "WELCOME BACK" : "TUNE IN, TOGETHER"}</h1>
         <p className="auth-modal-subtitle">
-          {mode === "login"
-            ? "Login to unlock advanced cards and save your profile"
-            : "Create an account to save your music and profile"}
+          {mode === "signin"
+            ? "Sign in to find your saved music and playlists right where you left them."
+            : "Create an account to keep your discoveries and playlists close."}
         </p>
-
-        <button
-          className="auth-google-button"
-          type="button"
-          onClick={() => window.location.assign("/api/auth/google/start")}
+        <div
+          ref={googleButton}
+          className={`auth-google-button${busy ? " is-busy" : ""}`}
+          role="group"
+          aria-label="Continue with Google"
+          aria-busy={busy}
         >
-          <svg className="auth-google-logo" viewBox="0 0 48 48" aria-hidden="true">
-            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
-            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.14-3.09-.4-4.55H24v9.02h12.91c-.58 2.96-2.26 5.48-4.74 7.18l7.64 5.93C44.27 37.75 46.98 31.7 46.98 24.55z" />
-            <path fill="#FBBC05" d="M10.53 28.59A14.4 14.4 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.19C.92 16.51 0 20.11 0 24s.92 7.49 2.53 10.78l8-6.19z" />
-            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.9-5.81l-7.64-5.93c-2.13 1.42-4.83 2.26-8.26 2.26-6.34 0-11.72-4.28-13.64-10.03l-8 6.19C6.37 42.59 14.6 48 24 48z" />
-          </svg>
-          <span>CONTINUE WITH GOOGLE</span>
-        </button>
-
-        <div className="auth-modal-divider" aria-hidden="true"><span>OR</span></div>
-
-        <form className="auth-modal-form" onSubmit={submit}>
-          {mode === "register" && (
-            <label>
-              <span>NAME</span>
-              <input
-                ref={nameInput}
-                type="text"
-                name="name"
-                autoComplete="name"
-                placeholder="Your name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                maxLength={120}
-                required
-              />
-            </label>
-          )}
-          <label>
-            <span>EMAIL</span>
+          <button className="auth-google-fallback" type="button" disabled>
+            Continue with Google
+          </button>
+        </div>
+        {busy && (
+          <p className="auth-modal-status" role="status">
+            {busyAction === "google"
+              ? "Verifying your Google account…"
+              : mode === "register" ? "Creating your account…" : "Signing you in…"}
+          </p>
+        )}
+        <div className="auth-modal-divider" aria-hidden="true">OR USE EMAIL</div>
+        <form className="auth-form" onSubmit={handlePasswordSubmit} noValidate={false}>
+          <label className="auth-field" htmlFor="auth-email">
+            <span>Email</span>
             <input
-              ref={emailInput}
-              type="email"
+              id="auth-email"
               name="email"
+              type="email"
               autoComplete="email"
-              placeholder="your@email.com"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@email.com"
               maxLength={254}
+              value={email}
+              onChange={(event) => {
+                setEmail(event.target.value);
+                if (error) setError("");
+              }}
               required
+              disabled={busy}
             />
           </label>
-          <label>
-            <span>PASSWORD</span>
+          <label className="auth-field" htmlFor="auth-password">
+            <span>Password</span>
             <input
-              type="password"
+              id="auth-password"
               name="password"
-              autoComplete={mode === "login" ? "current-password" : "new-password"}
-              placeholder="••••••••"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              minLength={mode === "register" ? 8 : undefined}
+              type="password"
+              autoComplete={mode === "register" ? "new-password" : "current-password"}
+              placeholder="Enter your password"
               maxLength={128}
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                if (error) setError("");
+              }}
+              aria-invalid={mode === "register" && password.length > 0 && password.length < 12}
+              aria-describedby={mode === "register" ? "auth-password-help" : undefined}
               required
+              disabled={busy}
             />
           </label>
-          {error && <p className="auth-modal-error" role="alert">{error}</p>}
-          <button className="auth-submit-button" type="submit" disabled={busy}>
-            {busy ? "PLEASE WAIT…" : mode === "login" ? "LOGIN" : "REGISTER"}
+          {mode === "register" && (
+            <p className="auth-password-help" id="auth-password-help">
+              Use at least 12 characters for your password.
+            </p>
+          )}
+          <button className="auth-submit" type="submit" disabled={busy}>
+            {busy && <span className="spinner spinner-dark" aria-hidden="true" />}
+            {mode === "signin" ? "Sign in" : "Create account"}
           </button>
         </form>
-
-        <p className="auth-modal-switch">
-          {mode === "login" ? "Don't have an account?" : "Already have an account?"}
-          {" "}
-          <button type="button" onClick={switchMode}>
-            {mode === "login" ? "REGISTER" : "LOGIN"}
+        {error && <p className="auth-modal-error" role="alert">{error}</p>}
+        <p className="auth-modal-footnote">
+          {mode === "signin" ? "New to Wave Tune?" : "Already have an account?"}{" "}
+          <button
+            type="button"
+            onClick={() => switchMode(mode === "signin" ? "register" : "signin")}
+            disabled={busy}
+          >
+            {mode === "signin" ? "REGISTER" : "LOG IN"}
           </button>
         </p>
       </section>
