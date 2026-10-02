@@ -1,22 +1,45 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import { clerkMiddleware } from "@clerk/express";
-import { publishableKeyFromHost } from "@clerk/shared/keys";
+import type { RequestHandler } from "express";
+import { authRouter } from "./authRoutes";
 import { accountRouter } from "./accountRoutes";
-import { isMongoConfigured } from "./database";
+import { DatabaseUnavailableError, isMongoConfigured } from "./database";
 import { getTrendingTracks, searchSpotify } from "./spotifyCatalog";
-import { CLERK_PROXY_PATH, clerkProxyMiddleware, getClerkProxyHost } from "./middlewares/clerkProxyMiddleware";
 import { searchYouTube } from "./youtube";
 
 const app = express();
 const port = Number(process.env.PORT ?? 5000);
+app.set("trust proxy", true);
 const allowedOrigins = (process.env.FRONTEND_ORIGIN ?? "")
   .split(",")
   .map((origin) => origin.trim().replace(/\/+$/, ""))
   .filter(Boolean);
-const clerkConfigured = Boolean(process.env.CLERK_SECRET_KEY && process.env.CLERK_PUBLISHABLE_KEY);
 
-app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
+const verifySameOrigin: RequestHandler = (request, response, next) => {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) {
+    next();
+    return;
+  }
+  const origin = request.get("origin")?.replace(/\/+$/, "");
+  if (!origin) {
+    next();
+    return;
+  }
+  const forwardedHost = request.get("x-forwarded-host")?.split(",")[0].trim();
+  const host = request.get("host");
+  const proto = request.get("x-forwarded-proto")?.split(",")[0].trim()
+    || (request.secure ? "https" : "http");
+  const requestHosts = [forwardedHost, host].filter((value): value is string => Boolean(value));
+  const sameOrigin = allowedOrigins.includes(origin)
+    || requestHosts.some((requestHost) =>
+      [`${proto}://${requestHost}`, `https://${requestHost}`, `http://${requestHost}`].includes(origin),
+    );
+  if (!sameOrigin) {
+    response.status(403).json({ error: "This request did not come from Wave Tune." });
+    return;
+  }
+  next();
+};
 
 app.use((request, response, next) => {
   const origin = request.headers.origin;
@@ -35,18 +58,8 @@ app.use((request, response, next) => {
 });
 
 app.use(express.json({ limit: "1mb" }));
-if (clerkConfigured) {
-  app.use(
-    clerkMiddleware((request) => ({
-      publishableKey: publishableKeyFromHost(
-        getClerkProxyHost(request) || request.hostname || "localhost",
-        process.env.CLERK_PUBLISHABLE_KEY,
-      ),
-    })),
-  );
-} else {
-  console.warn("Clerk is not configured; public catalog access remains available, but account routes are disabled.");
-}
+app.use("/api/auth", verifySameOrigin);
+app.use("/api/account", verifySameOrigin);
 
 app.get("/api/health", (_request, response) => {
   response.json({
@@ -54,7 +67,8 @@ app.get("/api/health", (_request, response) => {
     services: {
       mongodbConfigured: isMongoConfigured(),
       spotifyConfigured: Boolean(process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET),
-      authenticationConfigured: clerkConfigured,
+      authenticationConfigured: isMongoConfigured(),
+      googleOAuthConfigured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
     },
   });
 });
@@ -97,13 +111,8 @@ app.get("/api/youtube/search", async (request, response) => {
   }
 });
 
-if (clerkConfigured) {
-  app.use("/api/account", accountRouter);
-} else {
-  app.use("/api/account", (_request, response) => {
-    response.status(503).json({ error: "Account features are unavailable because Clerk is not configured." });
-  });
-}
+app.use("/api/auth", authRouter);
+app.use("/api/account", accountRouter);
 app.use("/api", (_request, response) => {
   response.status(404).json({ error: "That Wave Tune API route does not exist." });
 });
@@ -120,7 +129,7 @@ if (process.env.NODE_ENV === "production") {
 }
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-  if (error instanceof Error && error.message.includes("MongoDB is not configured")) {
+  if (error instanceof DatabaseUnavailableError) {
     response.status(503).json({ error: error.message });
     return;
   }
