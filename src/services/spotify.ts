@@ -218,23 +218,23 @@ export const spotifyService = {
     // unavailable for a limited account or a newly issued token and should
     // not turn the entire app into an empty state.
     const user = await api<SpotifyUser>("/me");
-    const [recentResult, topResult, playlistResult, savedResult, featuredResult] = await Promise.allSettled([
+    const [recentResult, topResult, playlistResult, savedResult, chartResult] = await Promise.allSettled([
       api<{ items: { track: SpotifyApiTrack }[] }>("/me/player/recently-played?limit=8"),
       api<{ items: SpotifyApiTrack[] }>("/me/top/tracks?limit=8&time_range=medium_term"),
       api<{ items: SpotifyPlaylistResponse[] }>("/me/playlists?limit=8"),
       api<{ items: { track: SpotifyApiTrack }[] }>("/me/tracks?limit=50"),
-      api<{ playlists?: { items?: SpotifyPlaylistResponse[] } }>("/browse/featured-playlists?limit=20&country=US"),
+      api<{ playlists?: { items?: SpotifyPlaylistResponse[] } }>("/search?type=playlist&limit=20&market=US&q=Top%2050%20Global"),
     ]);
     const recent = recentResult.status === "fulfilled" ? recentResult.value : { items: [] };
     const top = topResult.status === "fulfilled" ? topResult.value : { items: [] };
     const playlistResponse = playlistResult.status === "fulfilled" ? playlistResult.value : { items: [] };
     const savedTracks = savedResult.status === "fulfilled" ? savedResult.value : { items: [] };
-    const featuredPlaylists = featuredResult.status === "fulfilled" ? featuredResult.value.playlists?.items ?? [] : [];
+    const chartPlaylists = chartResult.status === "fulfilled" ? chartResult.value.playlists?.items ?? [] : [];
     const recentTracks = recent.items.map((item) => item.track).filter(Boolean).map(toTrack);
     const tracks = [...recent.items.map((item) => item.track), ...top.items]
       .filter((track, index, list) => list.findIndex((item) => item.id === track.id) === index)
       .map(toTrack);
-    const trendingPlaylist = featuredPlaylists.find((playlist) => /top hits|viral|trending/i.test(playlist.name)) ?? featuredPlaylists[0];
+    const trendingPlaylist = chartPlaylists.find((playlist) => /top 50|top hits|viral|trending/i.test(playlist.name));
     const trendingTracks = trendingPlaylist ? await playlistTracks(trendingPlaylist.id).catch(() => []) : [];
     const playlists = await Promise.all(
       playlistResponse.items.map(async (playlist) => ({
