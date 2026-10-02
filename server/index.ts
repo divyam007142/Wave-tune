@@ -68,7 +68,8 @@ app.get("/api/health", (_request, response) => {
       mongodbConfigured: isMongoConfigured(),
       spotifyConfigured: Boolean(process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET),
       authenticationConfigured: isMongoConfigured(),
-      googleOAuthConfigured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+      googleSignInConfigured: Boolean(process.env.GOOGLE_CLIENT_ID?.trim()),
+      passwordSignInConfigured: isMongoConfigured(),
     },
   });
 });
