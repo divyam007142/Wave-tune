@@ -23,7 +23,7 @@ Add these variables in the Pages environment and build a new deployment after ch
 | --- | --- |
 | `WAVE_TUNE_API_ORIGIN` | The Render service origin, for example `https://your-render-service.onrender.com` |
 
-Keep Google and Spotify client secrets, and the MongoDB URI, on the server. Do not add them to Cloudflare's browser-facing build variables.
+Keep the Spotify client secret and MongoDB URI on the server. The Google client ID is public and is returned by the server to initialize Google Identity Services; do not add private credentials to Cloudflare's browser-facing build variables.
 
 The Pages Function forwards `/api/*` requests to Render. `WAVE_TUNE_API_ORIGIN` must be only the Render origin, without `/api` at the end.
 
@@ -36,15 +36,13 @@ Configure these service environment variables:
 | Variable | Purpose |
 | --- | --- |
 | `FRONTEND_ORIGIN` | Exact Cloudflare Pages/custom-domain origin; comma-separate any additional allowed origins |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID for sign-in |
-| `GOOGLE_CLIENT_SECRET` | Private Google OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | Optional exact public callback URI ending in `/api/auth/google/callback` |
+| `GOOGLE_CLIENT_ID` | Public Web application client ID for Google Identity Services |
 | `SPOTIFY_CLIENT_ID` | Optional server-side Spotify catalog access |
 | `SPOTIFY_CLIENT_SECRET` | Optional private Spotify catalog credential |
 | `MONGODB_URI` | MongoDB connection string for account and playlist storage |
 | `MONGODB_DB_NAME` | Database name; `wave_tune` is the default |
 
-Render supplies `PORT`; do not set a fixed port. Add the exact public callback URL to the authorized redirect URIs in Google Cloud. Email/password sign-in and MongoDB-backed user data require no third-party auth provider. Password recovery is not included.
+Render supplies `PORT`; do not set a fixed port. Create a **Web application** client in Google Cloud Console under **Google Auth Platform → Clients**, and add the user-facing Pages/custom-domain origins to **Authorized JavaScript origins**. Set that client's **Client ID** as `GOOGLE_CLIENT_ID` in Render's environment settings. The popup sign-in flow needs no redirect URI or client secret. MongoDB stores the Wave Tune accounts and sessions.
 
 ## Verify a deployment
 
