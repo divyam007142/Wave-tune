@@ -2,7 +2,6 @@ import {
   createHash,
   createPublicKey,
   randomBytes,
-  timingSafeEqual,
   verify as verifySignature,
 } from "node:crypto";
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from "express";
@@ -10,23 +9,17 @@ import {
   createSession,
   destroySession,
   getCurrentUser,
-  hashPassword,
   normalizeEmail,
   publicUser,
   safeImage,
-  verifyPassword,
   type AuthUserDocument,
 } from "./auth";
 import { getDatabase } from "./database";
+import { hashPassword, passwordValidationError, verifyPassword } from "./passwords";
 
 const router = Router();
-const GOOGLE_STATE_COOKIE = "wave_tune_google_state";
 const GOOGLE_NONCE_COOKIE = "wave_tune_google_nonce";
-const GOOGLE_VERIFIER_COOKIE = "wave_tune_google_verifier";
 const GOOGLE_COOKIE_PATH = "/api/auth/google";
-const AUTH_RATE_WINDOW_MS = 15 * 60_000;
-const AUTH_RATE_LIMIT = 12;
-const authAttempts = new Map<string, number[]>();
 
 type GoogleKey = {
   kid: string;
@@ -44,6 +37,7 @@ type GoogleClaims = {
   exp?: number;
   iat?: number;
   nonce?: string;
+  azp?: string;
   email?: string;
   email_verified?: boolean;
   name?: string;
@@ -51,7 +45,14 @@ type GoogleClaims = {
 };
 
 let googleKeys: { keys: GoogleKey[]; expiresAt: number } | undefined;
-let dummyPasswordHash: Promise<string> | undefined;
+const passwordAttemptBuckets = new Map<string, { count: number; expiresAt: number }>();
+
+class AuthFlowError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthFlowError";
+  }
+}
 
 function asyncRoute(handler: (request: Request, response: Response) => Promise<void>): RequestHandler {
   return (request, response, next: NextFunction) => {
@@ -82,97 +83,94 @@ function cookieValue(request: Request, name: string) {
   return undefined;
 }
 
-function appendCookie(response: Response, value: string) {
-  const current = response.getHeader("Set-Cookie");
-  if (!current) {
-    response.setHeader("Set-Cookie", value);
-    return;
-  }
-  const cookies = Array.isArray(current) ? current : [String(current)];
-  response.setHeader("Set-Cookie", [...cookies, value]);
-}
-
 function requestIsSecure(request: Request) {
   return request.secure || request.get("x-forwarded-proto")?.split(",")[0].trim() === "https";
 }
 
 function setShortCookie(request: Request, response: Response, name: string, value: string) {
   const secure = requestIsSecure(request) ? "; Secure" : "";
-  appendCookie(
-    response,
-    `${name}=${encodeURIComponent(value)}; Path=${GOOGLE_COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age=600${secure}`,
-  );
+  response.cookie(name, value, {
+    path: GOOGLE_COOKIE_PATH,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: Boolean(secure),
+    maxAge: 10 * 60 * 1000,
+  });
 }
 
 function clearGoogleCookies(request: Request, response: Response) {
   const secure = requestIsSecure(request) ? "; Secure" : "";
-  for (const name of [GOOGLE_STATE_COOKIE, GOOGLE_NONCE_COOKIE, GOOGLE_VERIFIER_COOKIE]) {
-    appendCookie(
-      response,
-      `${name}=; Path=${GOOGLE_COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
-    );
-  }
-}
-
-function limitAuthAttempts(request: Request, response: Response, email: string) {
-  const ip = request.ip || request.socket.remoteAddress || "unknown";
-  const key = `${ip}:${email}`;
-  const now = Date.now();
-  const attempts = (authAttempts.get(key) ?? []).filter((time) => time > now - AUTH_RATE_WINDOW_MS);
-  if (attempts.length >= AUTH_RATE_LIMIT) {
-    authAttempts.set(key, attempts);
-    response.status(429).json({ error: "Too many attempts. Wait a little and try again." });
-    return false;
-  }
-  attempts.push(now);
-  authAttempts.set(key, attempts);
-  if (authAttempts.size > 4_000) {
-    for (const [storedKey, times] of authAttempts) {
-      if (!times.some((time) => time > now - AUTH_RATE_WINDOW_MS)) authAttempts.delete(storedKey);
-    }
-  }
-  return true;
+  response.append(
+    "Set-Cookie",
+    `${GOOGLE_NONCE_COOKIE}=; Path=${GOOGLE_COOKIE_PATH}; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
+  );
 }
 
 function validEmail(email: string) {
   return email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-function forwardedOrigin(request: Request) {
-  const proto = request.get("x-forwarded-proto")?.split(",")[0].trim()
-    || (requestIsSecure(request) ? "https" : "http");
-  const host = request.get("x-forwarded-host")?.split(",")[0].trim() || request.get("host");
-  if (!host || !/^[a-z\d.-]+(?::\d+)?$/i.test(host)) {
-    throw new Error("Could not determine the Google sign-in callback host.");
+function consumePasswordAttempt(key: string, limit: number, now: number) {
+  const existing = passwordAttemptBuckets.get(key);
+  if (!existing || existing.expiresAt <= now) {
+    passwordAttemptBuckets.set(key, { count: 1, expiresAt: now + 15 * 60 * 1000 });
+    return undefined;
   }
-  return `${proto}://${host}`;
+  if (existing.count >= limit) return existing.expiresAt;
+  existing.count += 1;
+  return undefined;
 }
 
-function googleRedirectUri(request: Request) {
-  return process.env.GOOGLE_REDIRECT_URI?.trim()
-    || `${forwardedOrigin(request)}/api/auth/google/callback`;
-}
+const passwordAuthRateLimit: RequestHandler = (request, response, next) => {
+  const now = Date.now();
+  const address = request.ip || request.socket.remoteAddress || "unknown";
+  const email = normalizeEmail(request.body?.email);
+  const ipKey = createHash("sha256").update(`ip:${address}`).digest("hex");
+  const accountKey = createHash("sha256").update(`account:${address}:${email}`).digest("hex");
+  const blockedUntil = [
+    consumePasswordAttempt(`ip:${ipKey}`, 40, now),
+    consumePasswordAttempt(`account:${accountKey}`, 10, now),
+  ].filter((expiresAt): expiresAt is number => expiresAt !== undefined);
 
-function redirectWithError(response: Response, code: string) {
-  response.redirect(302, `/sign-in?auth_error=${encodeURIComponent(code)}`);
-}
+  if (blockedUntil.length) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((Math.max(...blockedUntil) - now) / 1000));
+    response.setHeader("Retry-After", String(retryAfterSeconds));
+    response.status(429).json({ error: "Too many sign-in attempts. Wait a few minutes and try again." });
+    return;
+  }
+
+  if (passwordAttemptBuckets.size > 5000) {
+    for (const [key, bucket] of passwordAttemptBuckets) {
+      if (bucket.expiresAt <= now) passwordAttemptBuckets.delete(key);
+    }
+  }
+  next();
+};
 
 function base64UrlJson(value: string) {
   return JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
 }
 
+class GoogleVerificationUnavailableError extends Error {}
+
 async function loadGoogleKeys() {
   if (googleKeys && googleKeys.expiresAt > Date.now()) return googleKeys.keys;
-  const response = await fetch("https://www.googleapis.com/oauth2/v3/certs");
-  if (!response.ok) throw new Error("Google sign-in keys could not be loaded.");
-  const data = await response.json() as { keys?: GoogleKey[] };
-  const cacheControl = response.headers.get("cache-control") ?? "";
-  const maxAge = Number(cacheControl.match(/max-age=(\d+)/)?.[1] ?? 3600);
-  googleKeys = {
-    keys: data.keys ?? [],
-    expiresAt: Date.now() + Math.min(Math.max(maxAge, 60), 86_400) * 1000,
-  };
-  return googleKeys.keys;
+  try {
+    const response = await fetch("https://www.googleapis.com/oauth2/v3/certs", {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error("Google returned an unsuccessful key response.");
+    const data = await response.json() as { keys?: GoogleKey[] };
+    const cacheControl = response.headers.get("cache-control") ?? "";
+    const maxAge = Number(cacheControl.match(/max-age=(\d+)/)?.[1] ?? 3600);
+    googleKeys = {
+      keys: data.keys ?? [],
+      expiresAt: Date.now() + Math.min(Math.max(maxAge, 60), 86_400) * 1000,
+    };
+    return googleKeys.keys;
+  } catch {
+    throw new GoogleVerificationUnavailableError("Google sign-in verification is temporarily unavailable.");
+  }
 }
 
 async function verifyGoogleIdToken(idToken: string, clientId: string, expectedNonce: string) {
@@ -185,11 +183,14 @@ async function verifyGoogleIdToken(idToken: string, clientId: string, expectedNo
     throw new Error("Google returned an unsupported sign-in token.");
   }
 
-  const jwk = (await loadGoogleKeys()).find((key) => key.kid === header.kid && key.kty === "RSA");
+  let keys = await loadGoogleKeys();
+  let jwk = keys.find((key) => key.kid === header.kid && key.kty === "RSA");
   if (!jwk) {
     googleKeys = undefined;
-    throw new Error("Google sign-in keys have changed. Try again.");
+    keys = await loadGoogleKeys();
+    jwk = keys.find((key) => key.kid === header.kid && key.kty === "RSA");
   }
+  if (!jwk) throw new Error("Google sign-in keys have changed. Try again.");
   const publicKey = createPublicKey({
     key: { kty: "RSA", n: jwk.n, e: jwk.e },
     format: "jwk",
@@ -205,8 +206,11 @@ async function verifyGoogleIdToken(idToken: string, clientId: string, expectedNo
   if (
     !["accounts.google.com", "https://accounts.google.com"].includes(claims.iss ?? "")
     || !audience.includes(clientId)
+    || (audience.length > 1 && claims.azp !== clientId)
+    || (claims.azp !== undefined && claims.azp !== clientId)
     || !claims.exp || claims.exp <= now
     || !claims.iat || claims.iat > now + 60
+    || claims.iat < now - 600
     || claims.nonce !== expectedNonce
     || !claims.sub
     || claims.email_verified !== true
@@ -247,6 +251,9 @@ async function findOrCreateGoogleUser(claims: GoogleClaims) {
 
   const existingByEmail = await users.findOne({ emailNormalized: email });
   if (existingByEmail) {
+    if (existingByEmail.passwordHash && !existingByEmail.googleSub) {
+      throw new AuthFlowError("This email has a password account. Sign in with your password; sign-in methods cannot be linked yet.");
+    }
     if (existingByEmail.googleSub && existingByEmail.googleSub !== claims.sub) {
       throw new Error("That email is already linked to a different Google account.");
     }
@@ -276,70 +283,76 @@ async function findOrCreateGoogleUser(claims: GoogleClaims) {
     createdAt: now,
     updatedAt: now,
   };
-  await users.insertOne(user);
-  return user;
+  try {
+    await users.insertOne(user);
+    return user;
+  } catch (error) {
+    if (!duplicateKey(error)) throw error;
+    const racedUser = await users.findOne({
+      $or: [{ googleSub: claims.sub }, { emailNormalized: email }],
+    });
+    if (racedUser?.passwordHash && !racedUser.googleSub) {
+      throw new AuthFlowError("This email has a password account. Sign in with your password; sign-in methods cannot be linked yet.");
+    }
+    if (racedUser) return racedUser;
+    throw error;
+  }
 }
 
 router.get("/me", asyncRoute(async (request, response) => {
   response.json({ user: await getCurrentUser(request) });
 }));
 
-router.post("/register", asyncRoute(async (request, response) => {
+router.post("/logout", asyncRoute(async (request, response) => {
+  await destroySession(request, response);
+  response.json({ ok: true });
+}));
+
+router.post("/register", passwordAuthRateLimit, asyncRoute(async (request, response) => {
   const email = normalizeEmail(request.body?.email);
-  const name = stringValue(request.body?.name, 120);
-  const password = typeof request.body?.password === "string" ? request.body.password : "";
-  if (!validEmail(email)) {
+  const password = request.body?.password;
+  if (!email || !validEmail(email)) {
     response.status(400).json({ error: "Enter a valid email address." });
     return;
   }
-  if (name.length < 2) {
-    response.status(400).json({ error: "Enter your name." });
+  const passwordError = passwordValidationError(password);
+  if (passwordError) {
+    response.status(400).json({ error: passwordError });
     return;
   }
-  if (password.length < 8 || password.length > 128) {
-    response.status(400).json({ error: "Use a password between 8 and 128 characters." });
-    return;
-  }
-  if (!limitAuthAttempts(request, response, email)) return;
 
   const now = new Date();
   const user: AuthUserDocument = {
     id: randomBytes(16).toString("hex"),
     email,
     emailNormalized: email,
-    name,
-    passwordHash: await hashPassword(password),
+    name: email.split("@")[0].slice(0, 120) || "Wave Tune listener",
+    passwordHash: await hashPassword(password as string),
     emailVerified: false,
     createdAt: now,
     updatedAt: now,
   };
+  const users = await userCollection();
   try {
-    await (await userCollection()).insertOne(user);
+    await users.insertOne(user);
   } catch (error) {
-    if (duplicateKey(error)) {
-      response.status(409).json({ error: "An account already uses this email. Sign in instead." });
-      return;
-    }
-    throw error;
+    if (!duplicateKey(error)) throw error;
+    response.status(409).json({ error: "An account with this email already exists. Sign in instead." });
+    return;
   }
+
   await createSession(request, response, user.id);
   response.status(201).json({ user: publicUser(user) });
 }));
 
-router.post("/login", asyncRoute(async (request, response) => {
+router.post("/login", passwordAuthRateLimit, asyncRoute(async (request, response) => {
   const email = normalizeEmail(request.body?.email);
   const password = typeof request.body?.password === "string" ? request.body.password : "";
-  if (!validEmail(email) || !password || password.length > 128) {
-    response.status(400).json({ error: "Enter your email and password." });
-    return;
-  }
-  if (!limitAuthAttempts(request, response, email)) return;
-
-  const users = await userCollection();
-  const user = await users.findOne({ emailNormalized: email });
-  if (!dummyPasswordHash) dummyPasswordHash = hashPassword("WaveTune-invalid-login-sentinel");
-  const passwordMatches = await verifyPassword(password, user?.passwordHash ?? await dummyPasswordHash);
-  if (!user || !user.passwordHash || !passwordMatches) {
+  const user = email && validEmail(email)
+    ? await (await userCollection()).findOne({ emailNormalized: email })
+    : null;
+  const passwordMatches = await verifyPassword(password, user?.passwordHash);
+  if (!user?.passwordHash || !passwordMatches) {
     response.status(401).json({ error: "Email or password is incorrect." });
     return;
   }
@@ -348,94 +361,60 @@ router.post("/login", asyncRoute(async (request, response) => {
   response.json({ user: publicUser(user) });
 }));
 
-router.post("/logout", asyncRoute(async (request, response) => {
-  await destroySession(request, response);
-  response.json({ ok: true });
-}));
-
-router.get("/google/start", (request, response) => {
+router.get("/google/config", (request, response) => {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) {
-    redirectWithError(response, "google_not_configured");
+  if (!clientId) {
+    response.status(503).json({ error: "Google sign-in is not configured yet." });
     return;
   }
-  try {
-    const state = randomBytes(32).toString("base64url");
-    const nonce = randomBytes(32).toString("base64url");
-    const verifier = randomBytes(32).toString("base64url");
-    const challenge = createHash("sha256").update(verifier).digest("base64url");
-    setShortCookie(request, response, GOOGLE_STATE_COOKIE, state);
-    setShortCookie(request, response, GOOGLE_NONCE_COOKIE, nonce);
-    setShortCookie(request, response, GOOGLE_VERIFIER_COOKIE, verifier);
-
-    const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    authorizationUrl.search = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: googleRedirectUri(request),
-      response_type: "code",
-      scope: "openid email profile",
-      state,
-      nonce,
-      code_challenge: challenge,
-      code_challenge_method: "S256",
-      prompt: "select_account",
-    }).toString();
-    response.redirect(302, authorizationUrl.toString());
-  } catch (error) {
-    console.error("Could not start Google sign-in:", error instanceof Error ? error.message : "unknown error");
-    redirectWithError(response, "google_unavailable");
-  }
+  const nonce = randomBytes(32).toString("base64url");
+  setShortCookie(request, response, GOOGLE_NONCE_COOKIE, nonce);
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ clientId, nonce });
 });
 
-router.get("/google/callback", asyncRoute(async (request, response) => {
-  const stateCookie = cookieValue(request, GOOGLE_STATE_COOKIE);
-  const nonceCookie = cookieValue(request, GOOGLE_NONCE_COOKIE);
-  const verifierCookie = cookieValue(request, GOOGLE_VERIFIER_COOKIE);
-  const state = typeof request.query.state === "string" ? request.query.state : "";
-  const code = typeof request.query.code === "string" ? request.query.code : "";
+router.post("/google", asyncRoute(async (request, response) => {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
-
-  if (!stateCookie || !nonceCookie || !verifierCookie || !state || !code || !clientId || !clientSecret) {
+  const nonceCookie = cookieValue(request, GOOGLE_NONCE_COOKIE);
+  const credential = typeof request.body?.credential === "string" ? request.body.credential : "";
+  if (!clientId) {
     clearGoogleCookies(request, response);
-    redirectWithError(response, "google_failed");
+    response.status(503).json({ error: "Google sign-in is not configured yet." });
     return;
   }
-  const expectedState = Buffer.from(stateCookie);
-  const suppliedState = Buffer.from(state);
-  if (expectedState.length !== suppliedState.length || !timingSafeEqual(expectedState, suppliedState)) {
+  if (!nonceCookie || !credential || credential.length > 16_384) {
     clearGoogleCookies(request, response);
-    redirectWithError(response, "google_failed");
+    response.status(401).json({ error: "Google sign-in expired. Choose your account again." });
+    return;
+  }
+
+  let claims: GoogleClaims;
+  try {
+    claims = await verifyGoogleIdToken(credential, clientId, nonceCookie);
+  } catch (error) {
+    clearGoogleCookies(request, response);
+    const unavailable = error instanceof GoogleVerificationUnavailableError;
+    console.warn("Google identity verification failed:", error instanceof Error ? error.message : "unknown error");
+    response.status(unavailable ? 503 : 401).json({
+      error: unavailable
+        ? "Google sign-in is temporarily unavailable. Try again."
+        : "Google could not verify this account. Choose your account again.",
+    });
     return;
   }
 
   try {
-    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: googleRedirectUri(request),
-        grant_type: "authorization_code",
-        code_verifier: verifierCookie,
-      }),
-    });
-    if (!tokenResponse.ok) throw new Error("Google did not accept the sign-in code.");
-    const tokenData = await tokenResponse.json() as { id_token?: string };
-    if (!tokenData.id_token) throw new Error("Google did not return an identity token.");
-
-    const claims = await verifyGoogleIdToken(tokenData.id_token, clientId, nonceCookie);
     const user = await findOrCreateGoogleUser(claims);
     await createSession(request, response, user.id);
     clearGoogleCookies(request, response);
-    response.redirect(302, "/");
+    response.json({ user: publicUser(user) });
   } catch (error) {
-    console.error("Google sign-in failed:", error instanceof Error ? error.message : "unknown error");
     clearGoogleCookies(request, response);
-    redirectWithError(response, "google_failed");
+    if (error instanceof AuthFlowError) {
+      response.status(409).json({ error: error.message });
+      return;
+    }
+    throw error;
   }
 }));
 
