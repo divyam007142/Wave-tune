@@ -13,8 +13,9 @@ type AuthContextValue = {
   isAuthenticated: boolean;
   isLoading: boolean;
   refresh: () => Promise<void>;
-  login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
+  signInWithGoogle: (credential: string) => Promise<void>;
+  signInWithPassword: (email: string, password: string) => Promise<void>;
+  registerWithPassword: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -54,7 +55,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const signInWithGoogle = useCallback(async (credential: string) => {
+    const result = await authRequest<{ user: AuthenticatedUser }>("/api/auth/google", {
+      method: "POST",
+      body: JSON.stringify({ credential }),
+    });
+    setUser(result.user);
+  }, []);
+
+  const signInWithPassword = useCallback(async (email: string, password: string) => {
     const result = await authRequest<{ user: AuthenticatedUser }>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
@@ -62,10 +71,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(result.user);
   }, []);
 
-  const register = useCallback(async (name: string, email: string, password: string) => {
+  const registerWithPassword = useCallback(async (email: string, password: string) => {
     const result = await authRequest<{ user: AuthenticatedUser }>("/api/auth/register", {
       method: "POST",
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ email, password }),
     });
     setUser(result.user);
   }, []);
@@ -76,7 +85,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: Boolean(user), isLoading, refresh, login, register, logout }}>
+    <AuthContext.Provider value={{
+      user,
+      isAuthenticated: Boolean(user),
+      isLoading,
+      refresh,
+      signInWithGoogle,
+      signInWithPassword,
+      registerWithPassword,
+      logout,
+    }}>
       {children}
     </AuthContext.Provider>
   );
