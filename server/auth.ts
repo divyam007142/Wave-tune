@@ -1,13 +1,9 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Request, RequestHandler, Response } from "express";
 import { getDatabase } from "./database";
 
 const SESSION_COOKIE = "wave_tune_session";
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
-const SCRYPT_N = 16_384;
-const SCRYPT_R = 8;
-const SCRYPT_P = 1;
-const SCRYPT_KEY_LENGTH = 64;
 
 export type AuthUserDocument = {
   id: string;
@@ -15,8 +11,8 @@ export type AuthUserDocument = {
   emailNormalized: string;
   name: string;
   image?: string;
-  passwordHash?: string;
   googleSub?: string;
+  passwordHash?: string;
   emailVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -76,36 +72,6 @@ export function safeImage(value: unknown) {
   } catch {
     return undefined;
   }
-}
-
-function deriveKey(password: string, salt: Buffer) {
-  return new Promise<Buffer>((resolve, reject) => {
-    scrypt(
-      password,
-      salt,
-      SCRYPT_KEY_LENGTH,
-      { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: 64 * 1024 * 1024 },
-      (error, key) => error ? reject(error) : resolve(key as Buffer),
-    );
-  });
-}
-
-export async function hashPassword(password: string) {
-  const salt = randomBytes(16);
-  const key = await deriveKey(password, salt);
-  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString("base64url")}$${key.toString("base64url")}`;
-}
-
-export async function verifyPassword(password: string, storedHash: string) {
-  const [algorithm, nValue, rValue, pValue, saltValue, hashValue] = storedHash.split("$");
-  if (algorithm !== "scrypt" || !saltValue || !hashValue) return false;
-  const n = Number(nValue);
-  const r = Number(rValue);
-  const p = Number(pValue);
-  if (n !== SCRYPT_N || r !== SCRYPT_R || p !== SCRYPT_P) return false;
-  const expected = Buffer.from(hashValue, "base64url");
-  const actual = await deriveKey(password, Buffer.from(saltValue, "base64url"));
-  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
 export function publicUser(user: AuthUserDocument): SessionUser {
