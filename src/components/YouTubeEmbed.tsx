@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { usePlayer } from "../context/PlayerContext";
-import { loadYouTubeIframeApi, type YouTubeIframePlayer } from "../services/youtubeIframe";
+import { loadYouTubeIframeApi, type YouTubeIframePlayer } from "../services/youtubelframe";
 
 export function YouTubeEmbed() {
   const containerRef = useRef<HTMLDivElement | null>(null);
