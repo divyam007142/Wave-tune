@@ -23,14 +23,15 @@ Edit `.env` on your machine. Do not commit it or paste private values into chat.
 
 | Variable | Required for local use? | Purpose |
 | --- | --- | --- |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Only for real sign-in | Clerk browser key |
-| `VITE_CLERK_PROXY_URL` | No | Leave blank locally; the Pages deployment sets its production proxy URL |
-| `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` | Only for account features | Server-side Clerk verification |
-| `MONGODB_URI` | No for browsing | Persistent profiles, likes, listening history, and playlists |
-| `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` | No | Optional Spotify catalog access; YouTube search is the fallback |
+| `MONGODB_URI` | For accounts and saved data | User accounts, sessions, profiles, likes, listening history, and playlists |
+| `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` | Only for Google sign-in | Server-side Google OAuth credentials |
+| `GOOGLE_REDIRECT_URI` | Usually no in development | Override the callback URL if the public app is behind a proxy |
+| `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` | Yes for live music catalog | Spotify search, charts, track metadata, artwork, and album/artist/playlist data |
 | `FRONTEND_ORIGIN` | Usually no | Set to `http://localhost:5000` if testing a cross-origin request |
 
-Without Clerk configured, public catalog and guest playback still run; sign-in and saved account features are unavailable. Without Spotify credentials, the catalog uses YouTube search and shows a notice. YouTube playback runs in its embedded player.
+Spotify credentials are used by the server only; never put `SPOTIFY_CLIENT_SECRET` in a `VITE_` variable or browser code. Spotify supplies the catalog and music metadata. YouTube search is used only to resolve a playable video after a track is selected, and audio plays in YouTube's embedded player. If the Spotify API is unavailable or credentials are missing, the catalog shows an error instead of substituting YouTube search results.
+
+Wave Tune manages email/password accounts and sessions itself. Passwords are stored as scrypt hashes; account records, sessions, and saved music are stored in MongoDB. Email/password sign-in works without Google OAuth. To enable Google, add the Google OAuth client ID and secret, then register `https://<your-Replit-dev-domain>/api/auth/google/callback` as an authorized redirect URI in Google Cloud. No forgot-password flow is provided. A MongoDB connection error does not stop catalog search or YouTube playback.
 
 ## Start the local app
 
@@ -53,5 +54,6 @@ The build checks both client and server TypeScript before writing the frontend t
 
 - **Port 5000 is busy:** stop the other process using it, then run `npm run dev` again.
 - **The app shows an old screen:** make sure VS Code opened this repository’s root, then stop and restart the server.
-- **Catalog works but sign-in/account pages do not:** configure both Clerk browser and server variables; MongoDB is also needed for saved account data.
+- **Email sign-in or account storage fails:** check the MongoDB URI, DNS resolution, and network/IP access list.
+- **Google sign-in fails:** confirm both Google OAuth credentials are set and the exact callback URI is authorized in Google Cloud.
 - **API URLs return HTML instead of JSON in production:** check that Pages is rooted at `Wave-tune`, that its `functions/` directory was deployed, and that the Render origin is correct. See [DEPLOYMENT.md](DEPLOYMENT.md).
