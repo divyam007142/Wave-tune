@@ -11,13 +11,11 @@ services:
         value: "22"
       - key: FRONTEND_ORIGIN
         sync: false
-      - key: CLERK_SECRET_KEY
+      - key: GOOGLE_CLIENT_ID
         sync: false
-      - key: CLERK_PUBLISHABLE_KEY
+      - key: GOOGLE_CLIENT_SECRET
         sync: false
-      - key: VITE_CLERK_PUBLISHABLE_KEY
-        sync: false
-      - key: VITE_CLERK_PROXY_URL
+      - key: GOOGLE_REDIRECT_URI
         sync: false
       - key: SPOTIFY_CLIENT_ID
         sync: false
