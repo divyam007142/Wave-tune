@@ -624,6 +624,88 @@ button:focus-visible, input:focus-visible { outline-color: #caff5c; }
 .setting-value { color: #caff5c; }
 .auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #090c08; }
 .modal-backdrop { background: rgba(3, 5, 3, .78); }
+.auth-modal-backdrop {
+  position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center;
+  overflow-y: auto; padding: 20px; background: rgba(3, 5, 3, .78); backdrop-filter: blur(12px);
+}
+.auth-modal-card {
+  position: relative; width: min(100%, 464px); max-height: calc(100dvh - 40px); overflow-y: auto;
+  padding: 34px 32px 28px; border: 1px solid rgba(202, 255, 92, .3); border-radius: 17px;
+  color: #f1f4eb; background: linear-gradient(155deg, #171d12, #10140d 78%);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, .62), 0 0 0 5px rgba(202, 255, 92, .035);
+  font-family: "DM Mono", monospace; animation: auth-modal-enter .24s ease-out both;
+}
+.auth-modal-close {
+  position: absolute; top: 16px; right: 16px; display: grid; width: 32px; height: 32px;
+  place-items: center; border: 1px solid rgba(214, 231, 187, .14); border-radius: 8px;
+  color: #a4ae98; background: rgba(255, 255, 255, .035); transition: color .16s ease, border-color .16s ease, background .16s ease;
+}
+.auth-modal-close:hover { color: #caff5c; border-color: rgba(202, 255, 92, .35); background: rgba(202, 255, 92, .06); }
+.auth-modal-close svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.auth-modal-kicker {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 15px;
+  color: #a9b19d; font: 500 8px/1 "Space Mono", monospace; letter-spacing: .15em; text-transform: uppercase;
+}
+.auth-modal-kicker::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%; background: #caff5c;
+  box-shadow: 0 0 0 4px rgba(202, 255, 92, .09);
+}
+.auth-modal-card h1 {
+  margin: 0 36px 8px 0; color: #f1f4eb; font: 700 clamp(23px, 6vw, 29px)/1.08 "Space Mono", monospace;
+  letter-spacing: -.08em;
+}
+.auth-modal-subtitle { margin: 0 0 21px; color: #a2aa98; font: 400 10px/1.7 "DM Mono", monospace; }
+.auth-google-button {
+  display: flex; width: 100%; min-height: 47px; align-items: center; justify-content: center;
+  overflow: hidden; border: 1px solid rgba(214, 231, 187, .15); border-radius: 9px;
+  color: #e7edde; background: rgba(255, 255, 255, .045); font: 400 10px "DM Mono", monospace;
+  transition: border-color .18s ease, background .18s ease;
+}
+.auth-google-button:hover { border-color: rgba(202, 255, 92, .32); background: rgba(255, 255, 255, .065); }
+.auth-google-fallback {
+  width: 100%; min-height: 45px; border: 0; color: #e7edde; background: transparent;
+  font: 500 10px "DM Mono", monospace; letter-spacing: .025em;
+}
+.auth-google-button:not(.is-unavailable) .auth-google-fallback { cursor: progress; }
+.auth-google-button.is-unavailable .auth-google-fallback { cursor: not-allowed; opacity: .72; }
+.auth-google-button.is-busy { opacity: .72; pointer-events: none; }
+.auth-google-button iframe { max-width: 100%; }
+.auth-modal-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; color: #89927f; font: 500 8px "Space Mono", monospace; letter-spacing: .1em; }
+.auth-modal-divider::before, .auth-modal-divider::after { content: ""; height: 1px; flex: 1; background: rgba(214, 231, 187, .14); }
+.auth-form { display: grid; gap: 14px; }
+.auth-field { display: grid; gap: 7px; color: #dfe6d4; font: 500 9px "Space Mono", monospace; letter-spacing: .025em; text-transform: uppercase; }
+.auth-field input {
+  width: 100%; min-height: 45px; padding: 0 13px; border: 1px solid rgba(214, 231, 187, .13); border-radius: 9px;
+  color: #f1f4eb; background: rgba(255, 255, 255, .055); font: 400 11px "DM Mono", monospace;
+  transition: border-color .16s ease, background .16s ease;
+}
+.auth-field input::placeholder { color: #737d69; }
+.auth-field input:hover { border-color: rgba(214, 231, 187, .24); }
+.auth-field input:focus { border-color: rgba(202, 255, 92, .62); background: rgba(255, 255, 255, .075); }
+.auth-field input[aria-invalid="true"] { border-color: rgba(255, 144, 153, .72); }
+.auth-password-help { margin: -5px 0 0; color: #919b86; font: 400 8px/1.55 "DM Mono", monospace; }
+.auth-submit {
+  display: flex; width: 100%; min-height: 44px; align-items: center; justify-content: center; gap: 8px;
+  margin-top: 2px; border-radius: 8px; color: #11150b; background: #caff5c;
+  box-shadow: 0 8px 18px rgba(161, 205, 67, .12); font: 700 10px "Space Mono", monospace; letter-spacing: .06em;
+  text-transform: uppercase; transition: background .16s ease, transform .16s ease, opacity .16s ease;
+}
+.auth-submit:hover:not(:disabled) { transform: translateY(-1px); background: #d5ff7a; }
+.auth-submit:disabled { cursor: wait; opacity: .7; }
+.auth-modal-status { margin: 10px 0 0; color: #aab49d; text-align: center; font: 400 9px/1.5 "DM Mono", monospace; }
+.auth-modal-error { margin: 12px 0 0; padding: 10px 11px; color: #ffd3d5; border: 1px solid rgba(255, 122, 133, .24); border-radius: 8px; background: rgba(112, 38, 44, .22); font: 400 9px/1.55 "DM Mono", monospace; }
+.auth-modal-footnote { margin: 17px 0 0; color: #8f9984; text-align: center; font: 400 8px/1.55 "DM Mono", monospace; }
+.auth-modal-footnote button { padding: 0; color: #caff5c; background: transparent; font: 700 8px "DM Mono", monospace; text-decoration: underline; text-decoration-color: rgba(202, 255, 92, .38); text-underline-offset: 3px; }
+.auth-modal-footnote button:hover:not(:disabled) { color: #e0ff9f; text-decoration-color: currentColor; }
+.auth-modal-card button:focus-visible, .auth-modal-card input:focus-visible { outline: 2px solid #caff5c; outline-offset: 3px; }
+.auth-modal-card button:disabled { cursor: not-allowed; }
+@keyframes auth-modal-enter { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (max-width: 480px) {
+  .auth-modal-backdrop { padding: 12px; }
+  .auth-modal-card { max-height: calc(100dvh - 24px); padding: 29px 21px 23px; }
+  .auth-modal-kicker { margin-bottom: 13px; }
+  .auth-modal-card h1 { font-size: clamp(22px, 7vw, 27px); }
+}
 .field-label { color: #dfe6d4; }
 .field-label input { border-color: var(--line-strong); }
 .playlist-picker-row { color: #ecf1e6; border-color: var(--line); background: rgba(255, 255, 255, .035); }
