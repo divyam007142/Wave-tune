@@ -1,31 +1,31 @@
-@layer theme, base, clerk, components, utilities;
-@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Mono:wght@400;700&display=swap");
+@layer theme, base, components, utilities;
 @import "tailwindcss";
 
 :root {
-  font-family: "Manrope", system-ui, sans-serif;
-  color: #282b3a;
-  background: #e9e8f6;
+  font-family: "DM Mono", monospace;
+  color: #22251e;
+  background: #eeeadd;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --ink: #292b3a;
-  --muted: #838397;
-  --soft: #aaabbc;
-  --purple: #8f76d8;
-  --purple-deep: #725bbd;
-  --lavender: #ddd8f8;
-  --pink: #f1d8df;
-  --panel: rgba(255, 255, 255, .62);
-  --panel-strong: rgba(255, 255, 255, .82);
-  --line: rgba(68, 62, 99, .11);
-  --line-strong: rgba(68, 62, 99, .17);
-  --shadow: 0 24px 80px rgba(110, 101, 157, .15);
-  --radius: 21px;
+  --ink: #22251e;
+  --muted: #6c6c5d;
+  --soft: #898879;
+  --purple: #557c48;
+  --purple-deep: #385c34;
+  --lavender: #dce4d1;
+  --pink: #eadccd;
+  --panel: #f4f0e5;
+  --panel-strong: #f8f5eb;
+  --line: rgba(34, 37, 30, .22);
+  --line-strong: rgba(34, 37, 30, .58);
+  --shadow: 4px 4px 0 rgba(34, 37, 30, .12);
+  --radius: 0px;
 }
 
 * { box-sizing: border-box; }
 html, body, #root { min-height: 100%; margin: 0; }
-body { min-width: 320px; overflow-x: hidden; background: #e9e8f6; }
+body { min-width: 320px; overflow-x: hidden; background: #eeeadd; }
 button, input { font: inherit; }
 button { border: 0; cursor: pointer; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; }
