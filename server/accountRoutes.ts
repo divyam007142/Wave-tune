@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { getAuth } from "@clerk/express";
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import type { Playlist, Track } from "../src/types/music";
+import { requireAuth, sessionUserFrom, type SessionUser } from "./auth";
 import { getDatabase } from "./database";
 
 type Profile = {
@@ -12,7 +12,7 @@ type Profile = {
 };
 
 type UserDocument = {
-  clerkUserId: string;
+  accountId: string;
   profile: Profile;
   totalListeningSeconds: number;
   likedTracks: Track[];
@@ -20,6 +20,7 @@ type UserDocument = {
   playlists: Playlist[];
   lastTrack?: Track;
   lastListenedAt?: Date;
+  mergedIntoAccountId?: string;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -30,20 +31,6 @@ function asyncRoute(handler: (request: Request, response: Response) => Promise<v
   return (request, response, next: NextFunction) => {
     void handler(request, response).catch(next);
   };
-}
-
-const requireUser: RequestHandler = (request, response, next) => {
-  const userId = getAuth(request).userId;
-  if (!userId) {
-    response.status(401).json({ error: "Sign in to access your Wave Tune account." });
-    return;
-  }
-  response.locals.userId = userId;
-  next();
-};
-
-function userIdFrom(response: Response) {
-  return response.locals.userId as string;
 }
 
 function stringValue(value: unknown, maxLength: number) {
@@ -95,109 +82,121 @@ async function collection() {
   return (await getDatabase()).collection<UserDocument>("users");
 }
 
-async function clerkProfile(userId: string): Promise<Profile> {
-  const secretKey = process.env.CLERK_SECRET_KEY?.trim();
-  if (!secretKey) {
-    throw new Error("Clerk server authentication is not configured on Render.");
+function mergeById<T extends { id: string }>(primary: T[], legacy: T[], limit = Number.MAX_SAFE_INTEGER) {
+  const merged = new Map(primary.map((item) => [item.id, item]));
+  for (const item of legacy) {
+    if (!merged.has(item.id)) merged.set(item.id, item);
   }
-
-  const response = await fetch(`https://api.clerk.com/v1/users/${encodeURIComponent(userId)}`, {
-    headers: { Authorization: `Bearer ${secretKey}` },
-  });
-  if (!response.ok) {
-    throw new Error(`Could not verify the signed-in profile with the auth provider (${response.status}).`);
-  }
-  const data = await response.json() as {
-    id: string;
-    first_name?: string | null;
-    last_name?: string | null;
-    username?: string | null;
-    image_url?: string;
-    primary_email_address_id?: string | null;
-    email_addresses?: { id: string; email_address: string }[];
-  };
-  const name = [data.first_name, data.last_name].filter(Boolean).join(" ").trim()
-    || data.username?.trim()
-    || "Wave Tune listener";
-  const email = data.email_addresses?.find((item) => item.id === data.primary_email_address_id)?.email_address;
-  return {
-    id: userId,
-    name: stringValue(name, 120),
-    email: email ? stringValue(email, 320) : undefined,
-    image: safeArtwork(data.image_url),
-  };
+  return [...merged.values()].slice(0, limit);
 }
 
-async function ensureUser(userId: string) {
+async function ensureUser(user: SessionUser) {
   const users = await collection();
-  let document = await users.findOne({ clerkUserId: userId });
-  if (document) return document;
-
-  const profile = await clerkProfile(userId);
+  const profile: Profile = {
+    id: user.id,
+    name: stringValue(user.name, 120) || "Wave Tune listener",
+    email: stringValue(user.email, 320) || undefined,
+    image: safeArtwork(user.image),
+  };
   const now = new Date();
-  await users.updateOne(
-    { clerkUserId: userId },
-    {
-      $setOnInsert: {
-        clerkUserId: userId,
-        profile,
-        totalListeningSeconds: 0,
-        likedTracks: [],
-        recentTracks: [],
-        playlists: [],
-        createdAt: now,
-        updatedAt: now,
+
+  let document = await users.findOne({ accountId: user.id });
+  if (!document && user.emailVerified && profile.email) {
+    const legacy = await users.findOne(
+      {
+        "profile.email": profile.email,
+        accountId: { $ne: user.id },
+        mergedIntoAccountId: { $exists: false },
       },
-    },
-    { upsert: true },
-  );
-  document = await users.findOne({ clerkUserId: userId });
+      { collation: { locale: "en", strength: 2 } },
+    );
+    if (legacy) {
+      await users.updateOne(
+        { _id: legacy._id },
+        { $set: { accountId: user.id, profile, updatedAt: now } },
+      );
+      document = await users.findOne({ accountId: user.id });
+    }
+  }
+
+  if (!document) {
+    await users.updateOne(
+      { accountId: user.id },
+      {
+        $setOnInsert: {
+          accountId: user.id,
+          totalListeningSeconds: 0,
+          likedTracks: [],
+          recentTracks: [],
+          playlists: [],
+          createdAt: now,
+        },
+        $set: { profile, updatedAt: now },
+      },
+      { upsert: true },
+    );
+    document = await users.findOne({ accountId: user.id });
+  }
   if (!document) throw new Error("Could not create the Wave Tune account.");
+
+  if (user.emailVerified && profile.email) {
+    const legacyDocuments = await users.find(
+      {
+        "profile.email": profile.email,
+        accountId: { $ne: user.id },
+        mergedIntoAccountId: { $exists: false },
+      },
+      { collation: { locale: "en", strength: 2 } },
+    ).toArray();
+    for (const legacy of legacyDocuments) {
+      const playlists = mergeById(document.playlists ?? [], legacy.playlists ?? []);
+      await users.updateOne(
+        { accountId: user.id },
+        {
+          $set: {
+            likedTracks: mergeById(document.likedTracks ?? [], legacy.likedTracks ?? [], 500),
+            recentTracks: mergeById(document.recentTracks ?? [], legacy.recentTracks ?? [], 30),
+            playlists,
+            totalListeningSeconds: (document.totalListeningSeconds ?? 0) + (legacy.totalListeningSeconds ?? 0),
+            lastTrack: document.lastTrack ?? legacy.lastTrack,
+            lastListenedAt: !document.lastListenedAt || (legacy.lastListenedAt && legacy.lastListenedAt > document.lastListenedAt)
+              ? legacy.lastListenedAt
+              : document.lastListenedAt,
+            updatedAt: now,
+          },
+        },
+      );
+      await users.updateOne(
+        { _id: legacy._id },
+        { $set: { mergedIntoAccountId: user.id, updatedAt: now } },
+      );
+      document = await users.findOne({ accountId: user.id }) ?? document;
+    }
+    await users.updateOne({ accountId: user.id }, { $set: { profile, updatedAt: now } });
+    document = await users.findOne({ accountId: user.id }) ?? document;
+  }
   return document;
 }
 
-router.post("/sync", requireUser, asyncRoute(async (_request, response) => {
-  const userId = userIdFrom(response);
-  const profile = await clerkProfile(userId);
-  const users = await collection();
-  const now = new Date();
-  await users.updateOne(
-    { clerkUserId: userId },
-    {
-      $set: { profile, updatedAt: now },
-      $setOnInsert: {
-        clerkUserId: userId,
-        totalListeningSeconds: 0,
-        likedTracks: [],
-        recentTracks: [],
-        playlists: [],
-        createdAt: now,
-      },
-    },
-    { upsert: true },
-  );
-  response.json({ ok: true });
-}));
-
-router.get("/snapshot", requireUser, asyncRoute(async (_request, response) => {
-  const document = await ensureUser(userIdFrom(response));
+router.get("/snapshot", requireAuth, asyncRoute(async (_request, response) => {
+  const document = await ensureUser(sessionUserFrom(response));
   response.json(snapshot(document));
 }));
 
-router.post("/playback", requireUser, asyncRoute(async (request, response) => {
+router.post("/playback", requireAuth, asyncRoute(async (request, response) => {
   const track = normalizeTrack(request.body?.track);
   if (!track) {
     response.status(400).json({ error: "A valid track is required." });
     return;
   }
   const seconds = Math.max(0, Math.min(120, Math.floor(Number(request.body?.seconds) || 0)));
-  const userId = userIdFrom(response);
+  const user = sessionUserFrom(response);
   const users = await collection();
-  const existing = await ensureUser(userId);
+  const existing = await ensureUser(user);
   const recentTracks = [track, ...(existing.recentTracks ?? []).filter((item) => item.id !== track.id)].slice(0, 30);
   const now = new Date();
   await users.updateOne(
-    { clerkUserId: userId },
+    { accountId: user.id },
     {
       $set: { lastTrack: track, lastListenedAt: now, recentTracks, updatedAt: now },
       $inc: { totalListeningSeconds: seconds },
@@ -206,26 +205,26 @@ router.post("/playback", requireUser, asyncRoute(async (request, response) => {
   response.json({ ok: true });
 }));
 
-router.post("/likes", requireUser, asyncRoute(async (request, response) => {
+router.post("/likes", requireAuth, asyncRoute(async (request, response) => {
   const track = normalizeTrack(request.body?.track);
   if (!track) {
     response.status(400).json({ error: "A valid track is required." });
     return;
   }
   const users = await collection();
-  const document = await ensureUser(userIdFrom(response));
+  const document = await ensureUser(sessionUserFrom(response));
   const alreadyLiked = (document.likedTracks ?? []).some((item) => item.id === track.id);
   const likedTracks = alreadyLiked
     ? document.likedTracks.filter((item) => item.id !== track.id)
     : [track, ...(document.likedTracks ?? []).filter((item) => item.id !== track.id)].slice(0, 500);
   await users.updateOne(
-    { clerkUserId: document.clerkUserId },
+    { accountId: document.accountId },
     { $set: { likedTracks, updatedAt: new Date() } },
   );
   response.json({ liked: !alreadyLiked });
 }));
 
-router.post("/playlists", requireUser, asyncRoute(async (request, response) => {
+router.post("/playlists", requireAuth, asyncRoute(async (request, response) => {
   const name = stringValue(request.body?.name, 80);
   if (!name) {
     response.status(400).json({ error: "Give your playlist a name." });
@@ -242,23 +241,24 @@ router.post("/playlists", requireUser, asyncRoute(async (request, response) => {
     tracks: [],
   };
   const users = await collection();
-  await ensureUser(userIdFrom(response));
+  const user = sessionUserFrom(response);
+  await ensureUser(user);
   await users.updateOne(
-    { clerkUserId: userIdFrom(response) },
+    { accountId: user.id },
     { $push: { playlists: playlist }, $set: { updatedAt: new Date() } },
   );
   response.status(201).json({ playlist });
 }));
 
-router.post("/playlists/:playlistId/tracks", requireUser, asyncRoute(async (request, response) => {
+router.post("/playlists/:playlistId/tracks", requireAuth, asyncRoute(async (request, response) => {
   const track = normalizeTrack(request.body?.track);
   if (!track) {
     response.status(400).json({ error: "A valid track is required." });
     return;
   }
-  const userId = userIdFrom(response);
+  const user = sessionUserFrom(response);
   const users = await collection();
-  const document = await ensureUser(userId);
+  const document = await ensureUser(user);
   const playlist = (document.playlists ?? []).find((item) => item.id === request.params.playlistId);
   if (!playlist) {
     response.status(404).json({ error: "That playlist no longer exists." });
@@ -272,18 +272,18 @@ router.post("/playlists/:playlistId/tracks", requireUser, asyncRoute(async (requ
     artwork: playlist.artwork || track.artwork,
   };
   await users.updateOne(
-    { clerkUserId: userId, "playlists.id": playlist.id },
+    { accountId: user.id, "playlists.id": playlist.id },
     { $set: { "playlists.$": updated, updatedAt: new Date() } },
   );
   response.json({ playlist: updated });
 }));
 
-router.delete("/playlists/:playlistId", requireUser, asyncRoute(async (request, response) => {
-  const userId = userIdFrom(response);
+router.delete("/playlists/:playlistId", requireAuth, asyncRoute(async (request, response) => {
+  const user = sessionUserFrom(response);
   const users = await collection();
   const playlistId = String(request.params.playlistId ?? "");
   await users.updateOne(
-    { clerkUserId: userId },
+    { accountId: user.id },
     { $pull: { playlists: { id: playlistId } }, $set: { updatedAt: new Date() } },
   );
   response.json({ ok: true });
