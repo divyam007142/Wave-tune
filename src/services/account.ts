@@ -3,9 +3,20 @@ import type { Playlist, Track } from "../types/music";
 export type AppProfile = {
   id: string;
   name: string;
+  nickname?: string;
   email?: string;
   image?: string;
   totalListeningSeconds: number;
+};
+
+export type ListenerStats = {
+  id: string;
+  name: string;
+  nickname?: string;
+  image?: string;
+  totalListeningSeconds: number;
+  isOnline: boolean;
+  lastSeenAt: string | null;
 };
 
 export type AccountSnapshot = {
@@ -41,6 +52,25 @@ export const accountService = {
       method: "POST",
       body: JSON.stringify({ track, seconds }),
     });
+  },
+
+  updateProfile(nickname: string, image?: string) {
+    return request<{ profile: AppProfile }>("/api/account/profile", {
+      method: "PUT",
+      body: JSON.stringify({ nickname, ...(image !== undefined ? { image } : {}) }),
+    });
+  },
+
+  updatePresence(isOnline: boolean, keepalive = false) {
+    return request<{ ok: true }>("/api/account/presence", {
+      method: "POST",
+      keepalive,
+      body: JSON.stringify({ isOnline }),
+    });
+  },
+
+  getListenerStats() {
+    return request<{ listeners: ListenerStats[] }>("/api/account/listeners");
   },
 
   removeRecentTrack(trackId: string) {
