@@ -13,6 +13,7 @@ import { getDatabase } from "./database";
 type Profile = {
   id: string;
   name: string;
+  nickname?: string;
   email?: string;
   image?: string;
 };
@@ -26,6 +27,8 @@ type UserDocument = {
   playlists: Playlist[];
   lastTrack?: Track;
   lastListenedAt?: Date;
+  isOnline?: boolean;
+  lastSeenAt?: Date;
   mergedIntoAccountId?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -52,6 +55,16 @@ function safeArtwork(value: unknown) {
   } catch {
     return "";
   }
+}
+
+function safeProfileImage(value: unknown) {
+  if (typeof value !== "string") return "";
+  const image = value.trim();
+  if (!image || image.length > 400_000) return "";
+  if (/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(image)) {
+    return image;
+  }
+  return safeArtwork(image);
 }
 
 function normalizeTrack(value: unknown): Track | null {
@@ -86,6 +99,14 @@ function snapshot(document: UserDocument) {
     playlists: document.playlists ?? [],
     likedTracks: document.likedTracks ?? [],
     recentTracks: document.recentTracks ?? [],
+  };
+}
+
+function retainProfileCustomization(current: Profile | undefined, identity: Profile): Profile {
+  return {
+    ...identity,
+    ...(current?.nickname ? { nickname: current.nickname } : {}),
+    ...(current?.image ? { image: current.image } : {}),
   };
 }
 
@@ -128,7 +149,13 @@ async function ensureUser(user: SessionUser) {
     if (legacy) {
       await users.updateOne(
         { _id: legacy._id },
-        { $set: { accountId: user.id, profile, updatedAt: now } },
+        {
+          $set: {
+            accountId: user.id,
+            profile: retainProfileCustomization(legacy.profile, profile),
+            updatedAt: now,
+          },
+        },
       );
       document = await users.findOne({ accountId: user.id });
     }
@@ -205,9 +232,10 @@ async function ensureUser(user: SessionUser) {
       );
       document = (await users.findOne({ accountId: user.id })) ?? document;
     }
+    const mergedProfile = retainProfileCustomization(document.profile, profile);
     await users.updateOne(
       { accountId: user.id },
-      { $set: { profile, updatedAt: now } },
+      { $set: { profile: mergedProfile, updatedAt: now } },
     );
     document = (await users.findOne({ accountId: user.id })) ?? document;
   }
@@ -220,6 +248,99 @@ router.get(
   asyncRoute(async (_request, response) => {
     const document = await ensureUser(sessionUserFrom(response));
     response.json(snapshot(document));
+  }),
+);
+
+router.put(
+  "/profile",
+  requireAuth,
+  asyncRoute(async (request, response) => {
+    const user = sessionUserFrom(response);
+    const document = await ensureUser(user);
+    const nickname = stringValue(request.body?.nickname, 32);
+    const profile: Profile = { ...document.profile };
+    if (nickname) profile.nickname = nickname;
+    else delete profile.nickname;
+
+    if (Object.hasOwn(request.body ?? {}, "image")) {
+      const input = request.body.image;
+      const image = input === "" ? safeArtwork(user.image) : safeProfileImage(input);
+      if (input && !image) {
+        response.status(400).json({ error: "Choose a PNG, JPEG, or WebP image under 400 KB." });
+        return;
+      }
+      if (image) profile.image = image;
+      else delete profile.image;
+    }
+
+    const users = await collection();
+    await users.updateOne(
+      { accountId: user.id },
+      { $set: { profile, updatedAt: new Date() } },
+    );
+    response.json({
+      profile: {
+        ...profile,
+        totalListeningSeconds: document.totalListeningSeconds ?? 0,
+      },
+    });
+  }),
+);
+
+router.post(
+  "/presence",
+  requireAuth,
+  asyncRoute(async (request, response) => {
+    const user = sessionUserFrom(response);
+    await ensureUser(user);
+    const isOnline = request.body?.isOnline === true;
+    const fields: Record<string, unknown> = {
+      isOnline,
+      updatedAt: new Date(),
+    };
+    if (isOnline) fields.lastSeenAt = new Date();
+    const users = await collection();
+    await users.updateOne({ accountId: user.id }, { $set: fields });
+    response.json({ ok: true });
+  }),
+);
+
+router.get(
+  "/listeners",
+  requireAuth,
+  asyncRoute(async (_request, response) => {
+    const users = await collection();
+    const documents = await users
+      .find({ mergedIntoAccountId: { $exists: false } })
+      .project({
+        accountId: 1,
+        profile: 1,
+        totalListeningSeconds: 1,
+        isOnline: 1,
+        lastSeenAt: 1,
+      })
+      .toArray();
+    const onlineCutoff = Date.now() - 90_000;
+    const listeners = documents
+      .map((document) => ({
+        id: document.accountId,
+        name: stringValue(document.profile?.name, 120) || "Wave Tune listener",
+        nickname: stringValue(document.profile?.nickname, 32) || undefined,
+        image: safeProfileImage(document.profile?.image) || undefined,
+        totalListeningSeconds: Math.max(0, document.totalListeningSeconds ?? 0),
+        isOnline: document.isOnline === true
+          && document.lastSeenAt instanceof Date
+          && document.lastSeenAt.getTime() >= onlineCutoff,
+        lastSeenAt: document.lastSeenAt instanceof Date
+          ? document.lastSeenAt.toISOString()
+          : null,
+      }))
+      .sort((left, right) => {
+        if (left.isOnline !== right.isOnline) return left.isOnline ? -1 : 1;
+        return (right.lastSeenAt ? Date.parse(right.lastSeenAt) : 0)
+          - (left.lastSeenAt ? Date.parse(left.lastSeenAt) : 0);
+      });
+    response.json({ listeners });
   }),
 );
 
