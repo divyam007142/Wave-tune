@@ -43,6 +43,12 @@ export const accountService = {
     });
   },
 
+  removeRecentTrack(trackId: string) {
+    return request<{ ok: true }>(`/api/account/recent/${encodeURIComponent(trackId)}`, {
+      method: "DELETE",
+    });
+  },
+
   toggleLike(track: Track) {
     return request<{ liked: boolean }>("/api/account/likes", {
       method: "POST",
