@@ -3,16 +3,19 @@ import {
   Activity, ArrowLeft, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3,
   Heart, Home, Library, ListMusic, ListPlus, LogIn, LogOut, Menu, MoreHorizontal, Music2,
   Pause, Play, Plus, Radio, Search, Settings2, Shuffle, SkipBack, SkipForward, SlidersHorizontal,
-  Trash2, Upload, UserRound, Volume2, VolumeX, X,
+  Trash2, UserRound, Volume2, VolumeX, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Redirect, Route, Router, Switch, useLocation } from "wouter";
 import { AuthModal } from "./components/AuthModal";
+import { ListeningStats } from "./components/ListeningStats";
+import { NotificationCenter } from "./components/NotificationCenter";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { usePlayer } from "./context/PlayerContext";
 import { PlayerProvider } from "./context/PlayerContext";
 import { accountService, type AccountSnapshot, type AppProfile } from "./services/account";
 import { catalogService } from "./services/catalog";
+import { readStored, writeStored } from "./services/storage";
 import type { Playlist, SearchResult, Track } from "./types/music";
 
 type View = "home" | "search" | "library" | "liked" | "recent" | "playlists" | "settings";
@@ -21,6 +24,36 @@ const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return "0:00";
   return `${Math.floor(value / 60)}:${Math.floor(value % 60).toString().padStart(2, "0")}`;
+}
+
+async function optimizeProfileImage(file: File) {
+  if (!file.type.startsWith("image/")) throw new Error("Choose an image file.");
+  if (file.size > 8 * 1024 * 1024) throw new Error("Choose an image smaller than 8 MB.");
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = objectUrl;
+    await image.decode();
+    const scale = Math.min(1, 512 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Your browser could not prepare this image.");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((result) => result ? resolve(result) : reject(new Error("This image could not be saved.")), "image/webp", .82);
+    });
+    if (blob.size > 300_000) throw new Error("This image is too detailed to save. Choose another photo.");
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("This image could not be read."));
+      reader.onerror = () => reject(new Error("This image could not be read."));
+      reader.readAsDataURL(blob);
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 function Artwork({ track, className = "", priority = false }: { track?: Track | null; className?: string; priority?: boolean }) {
@@ -36,13 +69,13 @@ function PlaylistArtwork({ playlist, className = "" }: { playlist: Playlist; cla
   return <Artwork track={track ?? { id: playlist.id, title: playlist.name, artist: "Wave Tune playlist", album: playlist.name, duration: 0, artwork: playlist.artwork, accent: playlist.accent, source: "catalog" }} className={className} />;
 }
 
-function ProfileAvatar({ profile, large = false }: { profile?: Pick<AppProfile, "name" | "image">; large?: boolean }) {
+function ProfileAvatar({ profile, large = false }: { profile?: Pick<AppProfile, "name" | "nickname" | "image">; large?: boolean }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [profile?.image]);
   if (profile?.image && !imageFailed) {
-    return <img className={`profile-avatar-image ${large ? "large" : ""}`} src={profile.image} alt={`${profile.name}'s profile`} referrerPolicy="no-referrer" onError={() => setImageFailed(true)} />;
+    return <img className={`profile-avatar-image ${large ? "large" : ""}`} src={profile.image} alt={`${profile.nickname || profile.name}'s profile`} referrerPolicy="no-referrer" onError={() => setImageFailed(true)} />;
   }
-  return <span className={`profile-avatar ${large ? "large" : ""}`}>{profile?.name?.trim().slice(0, 2).toUpperCase() || "WT"}</span>;
+  return <span className={`profile-avatar ${large ? "large" : ""}`}>{(profile?.nickname || profile?.name)?.trim().slice(0, 2).toUpperCase() || "WT"}</span>;
 }
 
 function WaveLogo({ compact = false }: { compact?: boolean }) {
@@ -53,7 +86,7 @@ function IconButton({ label, onClick, children, active = false, className = "" }
   return <motion.button type="button" whileTap={{ scale: .92 }} className={`icon-button ${active ? "is-active" : ""} ${className}`} aria-label={label} title={label} onClick={onClick}>{children}</motion.button>;
 }
 
-function TrackRow({ track, index, context, onAddToPlaylist }: { track: Track; index?: number; context?: Track[]; onAddToPlaylist?: (track: Track) => void }) {
+function TrackRow({ track, index, context, onAddToPlaylist, onRemove, removeLabel = "Remove song" }: { track: Track; index?: number; context?: Track[]; onAddToPlaylist?: (track: Track) => void; onRemove?: (track: Track) => void; removeLabel?: string }) {
   const { currentTrack, isPlaying, requestTrack, togglePlay, likedIds, toggleLike, addToQueue, removeFromQueue, queue } = usePlayer();
   const active = currentTrack?.id === track.id;
   const queued = queue.some((item) => item.id === track.id);
@@ -66,18 +99,19 @@ function TrackRow({ track, index, context, onAddToPlaylist }: { track: Track; in
       <IconButton label={likedIds.includes(track.id) ? "Unlike song" : "Like song"} active={likedIds.includes(track.id)} onClick={() => toggleLike(track)}><Heart size={15} fill={likedIds.includes(track.id) ? "currentColor" : "none"} /></IconButton>
       {onAddToPlaylist && <IconButton label="Add to playlist" onClick={() => onAddToPlaylist(track)}><ListPlus size={15} /></IconButton>}
       <IconButton label={queued ? "Remove from queue" : "Add to queue"} onClick={() => queued ? removeFromQueue(track.id) : addToQueue(track)}>{queued ? <Check size={15} /> : <Plus size={15} />}</IconButton>
+      {onRemove && <IconButton label={removeLabel} onClick={() => onRemove(track)}><Trash2 size={15} /></IconButton>}
     </span>
     <span className="track-duration">{track.duration ? formatTime(track.duration) : "—"}</span>
   </motion.div>;
 }
 
-function TrackCard({ track, context, onAddToPlaylist }: { track: Track; context?: Track[]; onAddToPlaylist?: (track: Track) => void }) {
+function TrackCard({ track, context, onAddToPlaylist, onDismiss }: { track: Track; context?: Track[]; onAddToPlaylist?: (track: Track) => void; onDismiss?: (track: Track) => void }) {
   const { currentTrack, isPlaying, requestTrack, togglePlay, addToQueue } = usePlayer();
   const active = currentTrack?.id === track.id;
   return <motion.article className={`track-card ${active ? "is-current" : ""}`} whileHover={{ y: -5 }} transition={{ type: "spring", stiffness: 300, damping: 22 }}>
     <div className="card-art-wrap"><Artwork track={track} className="card-art" priority /><motion.button whileTap={{ scale: .88 }} className="card-play" aria-label={`${active && isPlaying ? "Pause" : "Play"} ${track.title}`} onClick={() => active && isPlaying ? togglePlay() : requestTrack(track, context)}>{active && isPlaying ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}</motion.button></div>
     <div className="card-title">{track.title}</div><div className="card-subtitle">{track.artist}</div>
-    <div className="card-actions"><button className="card-queue" onClick={() => addToQueue(track)}><Plus size={13} /> Queue</button>{onAddToPlaylist && <button className="card-queue" onClick={() => onAddToPlaylist(track)}><ListPlus size={13} /> Save</button>}</div>
+    <div className="card-actions"><button className="card-queue" onClick={() => addToQueue(track)}><Plus size={13} /> Queue</button>{onAddToPlaylist && <button className="card-queue" onClick={() => onAddToPlaylist(track)}><ListPlus size={13} /> Save</button>}{onDismiss && <button className="card-dismiss-link" type="button" aria-label={`Remove ${track.title} from For you`} title="Hide this recommendation" onClick={() => onDismiss(track)}><Trash2 size={12} /> Hide</button>}</div>
   </motion.article>;
 }
 
@@ -85,26 +119,76 @@ function SectionHeader({ eyebrow, title, action, onAction }: { eyebrow?: string;
   return <div className="section-header"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>{action && <button className="text-button" onClick={onAction}>{action}<ArrowRight size={14} /></button>}</div>;
 }
 
-function Sidebar({ activeView, onNavigate, collapsed, setCollapsed, onImport, profile, playlists, onLogin, onLogout }: { activeView: View; onNavigate: (view: View) => void; collapsed: boolean; setCollapsed: (value: boolean) => void; onImport: () => void; profile?: AppProfile; playlists: Playlist[]; onLogin: () => void; onLogout: () => void }) {
+function Sidebar({ activeView, onNavigate, collapsed, setCollapsed, profile, playlists, onLogin, onLogout }: { activeView: View; onNavigate: (view: View) => void; collapsed: boolean; setCollapsed: (value: boolean) => void; profile?: AppProfile; playlists: Playlist[]; onLogin: () => void; onLogout: () => void }) {
   return <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
     <div className="sidebar-top"><WaveLogo compact={collapsed} /><span className="reference-brand">Wave Tune</span><IconButton label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => setCollapsed(!collapsed)}>{collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}</IconButton></div>
     <nav className="sidebar-nav" aria-label="Primary navigation"><span className="nav-label">Recommend</span>{[{ id: "home" as View, label: "For you", icon: Home }, { id: "search" as View, label: "Discover", icon: Search }, { id: "library" as View, label: "Library", icon: Library }, { id: "recent" as View, label: "Recently played", icon: Clock3 }].map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? "is-active" : ""}`} onClick={() => onNavigate(id)} title={collapsed ? label : undefined}><Icon size={15} /><span>{label}</span></button>)}<span className="nav-label sidebar-sub-label">My music</span>{[{ id: "liked" as View, label: "Liked songs", icon: Heart }, { id: "playlists" as View, label: "Playlists", icon: ListMusic }, { id: "settings" as View, label: "Settings", icon: Settings2 }].map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? "is-active" : ""}`} onClick={() => onNavigate(id)}><Icon size={15} /><span>{label}</span></button>)}</nav>
     <div className="sidebar-playlists"><div className="sidebar-playlist-head"><span className="nav-label">Playlists</span><IconButton label="Open playlists" onClick={() => onNavigate("playlists")}><Plus size={16} /></IconButton></div>{playlists.slice(0, 3).map((playlist) => <button className="sidebar-playlist" key={playlist.id} onClick={() => onNavigate("playlists")}><span className="playlist-dot" style={{ backgroundImage: playlist.artwork ? `url(${playlist.artwork})` : undefined }} /><span>{playlist.name}</span></button>)}</div>
-    <div className="sidebar-actions"><button className="import-button" onClick={onImport}><Upload size={16} /><span>Import music</span></button>{profile ? <button className="spotify-connect-button" onClick={onLogout}><LogOut size={15} /><span>Sign out</span></button> : <button className="spotify-connect-button" onClick={onLogin}><LogIn size={15} /><span>Log in</span></button>}</div>
-    <div className="sidebar-footer"><ProfileAvatar profile={profile} /><span><strong>{profile?.name ?? "Guest listener"}</strong><small>{profile ? `${Math.round(profile.totalListeningSeconds / 60)} min listened` : "Five songs free"}</small></span><MoreHorizontal size={16} /></div>
+    <div className="sidebar-actions">{profile ? <button className="spotify-connect-button" onClick={onLogout}><LogOut size={15} /><span>Sign out</span></button> : <button className="spotify-connect-button" onClick={onLogin}><LogIn size={15} /><span>Log in</span></button>}</div>
+    <div className="sidebar-footer"><ProfileAvatar profile={profile} /><span><strong>{profile?.nickname || profile?.name || "Guest listener"}</strong><small>{profile ? `${Math.round(profile.totalListeningSeconds / 60)} min listened` : "Five songs free"}</small></span><MoreHorizontal size={16} /></div>
   </aside>;
 }
 
 function TopBar({ profile, onSearch, onSettings, onLogin, onMenu }: { profile?: AppProfile; onSearch: () => void; onSettings: () => void; onLogin: () => void; onMenu: () => void }) {
-  return <><header className="mobile-topbar"><button className="mobile-menu" onClick={onMenu} aria-label="Open menu"><Menu size={20} /></button><WaveLogo /><div className="topbar-actions"><IconButton label="Search" onClick={onSearch}><Search size={18} /></IconButton><IconButton label="Settings" onClick={onSettings}><Settings2 size={18} /></IconButton></div></header>
-     <div className="desktop-toolbar"><div className="history-buttons"><IconButton label="Back" onClick={() => window.history.back()}><ArrowLeft size={17} /></IconButton><IconButton label="Forward" onClick={() => window.history.forward()}><ArrowRight size={17} /></IconButton></div><button className="toolbar-search" onClick={onSearch}><Search size={16} /><span>Search the catalog</span><kbd>⌘ K</kbd></button><div className="toolbar-spacer" /><button className="toolbar-icon" aria-label="Activity" onClick={onSettings}><Activity size={17} /></button><button className="toolbar-profile" onClick={profile ? onSettings : onLogin}><ProfileAvatar profile={profile} /><span>{profile?.name ?? "Log in"}</span><ChevronDown size={14} /></button></div></>;
+  return <><header className="mobile-topbar"><button className="mobile-menu" onClick={onMenu} aria-label="Open menu"><Menu size={20} /></button><WaveLogo /><div className="topbar-actions"><IconButton label="Search" onClick={onSearch}><Search size={18} /></IconButton><NotificationCenter /><IconButton label="Settings" onClick={onSettings}><Settings2 size={18} /></IconButton></div></header>
+     <div className="desktop-toolbar"><div className="history-buttons"><IconButton label="Back" onClick={() => window.history.back()}><ArrowLeft size={17} /></IconButton><IconButton label="Forward" onClick={() => window.history.forward()}><ArrowRight size={17} /></IconButton></div><button className="toolbar-search" onClick={onSearch}><Search size={16} /><span>Search the catalog</span><kbd>⌘ K</kbd></button><div className="toolbar-spacer" /><NotificationCenter /><button className="toolbar-profile" onClick={profile ? onSettings : onLogin}><ProfileAvatar profile={profile} /><span>{profile?.nickname || profile?.name || "Log in"}</span><ChevronDown size={14} /></button></div></>;
 }
 
 function HomeView({ tracks, recentTracks, loading, error, onRefresh, onNavigate, onAddToPlaylist }: { tracks: Track[]; recentTracks: Track[]; loading: boolean; error: string | null; onRefresh: () => void; onNavigate: (view: View) => void; onAddToPlaylist: (track: Track) => void }) {
   const recent = recentTracks.slice(0, 5);
-  if (loading) return <div className="page home-page"><div className="home-loading"><div className="loading-orb"><Music2 size={24} /></div><h2>Finding the next wave</h2><p>Wave Tune is loading live music, artwork, and your listening space.</p></div></div>;
-  if (error || !tracks.length) return <div className="page home-page"><div className="empty-state home-empty"><div className="empty-state-brand"><WaveLogo /></div><span className="eyebrow">YOUR MUSIC, YOUR SPACE</span><h2>{error ? "The live catalog needs a refresh" : "No live songs yet"}</h2><p>{error ?? "Search the catalog to find something to play."}</p><div className="empty-actions"><button className="secondary-button" onClick={onRefresh}><Activity size={14} /> Try again</button><button className="secondary-button" onClick={() => onNavigate("search")}><Search size={14} /> Explore</button></div></div></div>;
-  return <div className="page home-page reference-home"><section className="reference-release-section"><div className="reference-section-heading"><div><span className="eyebrow">WAVE TUNE DISCOVER</span><h1>Trending right now</h1></div><span>Live from YouTube</span></div><div className="reference-trending-grid">{tracks.map((track) => <TrackCard key={track.id} track={track} context={tracks} onAddToPlaylist={onAddToPlaylist} />)}</div></section><section className="reference-recent-section"><div className="reference-section-heading"><div><span className="eyebrow">YOUR LISTENING</span><h2>Recently played</h2></div><button className="reference-see-all" onClick={() => onNavigate("recent")}>See all</button></div>{recent.length ? <div className="card-row">{recent.map((track) => <TrackCard key={track.id} track={track} context={recent} onAddToPlaylist={onAddToPlaylist} />)}</div> : <div className="empty-inline">Your listening history will appear here after you play a song.</div>}</section></div>;
+  const categories = ["For you", "Pop", "Hip-hop", "R&B", "Electronic", "Indie", "Chill"];
+  const [category, setCategory] = useState("For you");
+  const [categoryTracks, setCategoryTracks] = useState<Track[]>([]);
+  const [categoryLoading, setCategoryLoading] = useState(false);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
+  const [dismissedIds, setDismissedIds] = useState<string[]>(() => readStored<string[]>("hidden-recommendations", []));
+  useEffect(() => {
+    if (category === "For you") {
+      setCategoryTracks([]);
+      setCategoryLoading(false);
+      setCategoryError(null);
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    setCategoryTracks([]);
+    setCategoryLoading(true);
+    setCategoryError(null);
+    catalogService.search(`${category} trending songs`, controller.signal)
+      .then((result) => { if (active) setCategoryTracks(result.tracks); })
+      .catch((cause) => {
+        if (active && !controller.signal.aborted) setCategoryError(cause instanceof Error ? cause.message : "This category is unavailable.");
+      })
+      .finally(() => { if (active) setCategoryLoading(false); });
+    return () => { active = false; controller.abort(); };
+  }, [category]);
+  const sourceTracks = category === "For you" ? tracks : categoryTracks;
+  const visibleTracks = sourceTracks.filter((track) => !dismissedIds.includes(track.id));
+  const visibleLoading = category === "For you" ? loading : categoryLoading;
+  const visibleError = category === "For you" ? error : categoryError;
+  const dismiss = (track: Track) => {
+    setDismissedIds((current) => {
+      const next = [...new Set([...current, track.id])];
+      try {
+        writeStored("hidden-recommendations", next);
+      } catch {
+        // Hiding the recommendation still works for this render if storage is full.
+      }
+      return next;
+    });
+  };
+  return <div className="page home-page reference-home">
+    <section className="reference-release-section">
+      <div className="reference-section-heading"><div><span className="eyebrow">WAVE TUNE DISCOVER</span><h1>{category === "For you" ? "Trending right now" : `${category} for you`}</h1></div><span>Fresh picks · Updated live</span></div>
+      <nav className="music-categories" aria-label="Music categories">{categories.map((item) => <button type="button" key={item} className={category === item ? "is-active" : ""} onClick={() => setCategory(item)}>{item}</button>)}</nav>
+      {visibleLoading && category === "For you" && <div className="reference-trending-grid trending-skeleton-grid" role="status" aria-label="Loading trending songs">{Array.from({ length: 8 }, (_, index) => <div className="track-card trend-skeleton" key={index} aria-hidden="true"><span className="trend-skeleton-art" /><span className="trend-skeleton-line" /><span className="trend-skeleton-line short" /></div>)}</div>}
+      {visibleLoading && category !== "For you" && <div className="category-loading" role="status"><span className="spinner" /> Finding {category.toLowerCase()} tracks…</div>}
+      {visibleError && <div className="empty-inline category-error">{visibleError}</div>}
+      {!visibleLoading && !visibleError && visibleTracks.length > 0 && <div className="reference-trending-grid">{visibleTracks.map((track) => <TrackCard key={track.id} track={track} context={visibleTracks} onAddToPlaylist={onAddToPlaylist} onDismiss={dismiss} />)}</div>}
+      {!visibleLoading && !visibleError && !visibleTracks.length && <div className="empty-inline">No recommendations left in this category. Choose another sound or <button type="button" className="inline-action" onClick={() => { setDismissedIds([]); try { writeStored("hidden-recommendations", []); } catch { /* The restored songs still appear until the page is reloaded. */ } }}>restore hidden songs</button>.</div>}
+    </section>
+    <section className="reference-recent-section"><div className="reference-section-heading"><div><span className="eyebrow">YOUR LISTENING</span><h2>Recently played</h2></div><button className="reference-see-all" onClick={() => onNavigate("recent")}>See all</button></div>{recent.length ? <div className="card-row">{recent.map((track) => <TrackCard key={track.id} track={track} context={recent} onAddToPlaylist={onAddToPlaylist} />)}</div> : <div className="empty-inline">Your listening history will appear here after you play a song.</div>}</section>
+  </div>;
 }
 
 function SearchView({ onAddToPlaylist }: { onAddToPlaylist: (track: Track) => void }) {
@@ -146,7 +230,7 @@ function QueuePanel() {
   return <section className="queue-panel"><div className="queue-head"><div><span className="eyebrow">LISTENING NEXT</span><h2>Queue</h2></div><button className="text-button" onClick={clearQueue}>Clear all</button></div><div className="now-playing-card"><Artwork track={currentTrack} className="queue-now-art" /><span className="queue-now-copy"><small>NOW PLAYING</small><strong>{currentTrack?.title ?? "Nothing playing"}</strong><span>{currentTrack?.artist ?? "Choose a track"}</span></span><span className="eq-mark"><i /><i /><i /></span></div><div className="queue-list">{queue.length ? queue.map((track, index) => <motion.div layout key={track.id} className="queue-item"><span className="queue-number">{String(index + 1).padStart(2, "0")}</span><button onClick={() => playQueueTrack(track)}><Artwork track={track} className="queue-art" /><span><strong>{track.title}</strong><small>{track.artist}</small></span></button><IconButton label={`Remove ${track.title} from queue`} onClick={() => removeFromQueue(track.id)}><X size={14} /></IconButton></motion.div>) : <div className="queue-empty"><ListMusic size={24} /><p>Your queue is empty</p><span>Add songs from a card to keep listening.</span></div>}</div><div className="queue-footer"><span>{queue.length} {queue.length === 1 ? "song" : "songs"} queued</span><button onClick={clearQueue}><Trash2 size={14} /> Clear</button></div></section>;
 }
 
-function ActivityRail({ recentTracks }: { recentTracks: Track[] }) {
+function ActivityRail({ recentTracks, isSignedIn, onLogin }: { recentTracks: Track[]; isSignedIn: boolean; onLogin: () => void }) {
   const { addToQueue, playNext, toggleLike, likedIds, requestTrack } = usePlayer();
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -183,7 +267,7 @@ function ActivityRail({ recentTracks }: { recentTracks: Track[] }) {
         </div>
       </div>) : <div className="empty-inline">Play a song to start your history.</div>}
     </div>
-    <div className="rail-footer"><Activity size={15} /><span>Listening time is saved to your account.</span></div>
+    <ListeningStats isSignedIn={isSignedIn} onLogin={onLogin} />
     <QueuePanel />
   </aside>;
 }
@@ -194,25 +278,70 @@ function DesktopPlayer({ onExpand }: { onExpand: () => void }) {
   return <div className="desktop-player"><button className="player-track" onClick={onExpand}><Artwork track={currentTrack} className="player-art" /><span><strong>{currentTrack?.title ?? "Nothing playing"}</strong><small>{currentTrack?.artist ?? "Choose a track"}</small></span></button><div className="player-controls"><div><IconButton label={`Shuffle ${shuffle ? "on" : "off"}`} active={shuffle} onClick={toggleShuffle}><Shuffle size={15} /></IconButton><IconButton label="Previous" onClick={previous}><SkipBack size={17} fill="currentColor" /></IconButton><motion.button type="button" whileTap={{ scale: .9 }} className="player-play" aria-label={isPlaying ? "Pause" : "Play"} onClick={togglePlay}>{isLoading ? <span className="spinner" /> : isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}</motion.button><IconButton label="Next" onClick={next}><SkipForward size={17} fill="currentColor" /></IconButton><IconButton label={`Repeat ${repeat}`} active={repeat !== "off"} onClick={cycleRepeat}><Radio size={15} /></IconButton></div><div className="player-progress"><span>{formatTime(currentTime)}</span><input style={progressStyle} aria-label="Song progress" type="range" min="0" max={duration || 1} step=".1" value={Math.min(currentTime, duration || 1)} onChange={(event) => seek(Number(event.target.value))} /><span>{formatTime(duration)}</span></div></div><div className="player-actions"><IconButton label={currentTrack && likedIds.includes(currentTrack.id) ? "Unlike song" : "Like song"} onClick={() => currentTrack && toggleLike(currentTrack)}><Heart size={16} fill={currentTrack && likedIds.includes(currentTrack.id) ? "currentColor" : "none"} /></IconButton><IconButton label="Open full player" onClick={onExpand}><ListMusic size={16} /></IconButton></div></div>;
 }
 
-function SettingsView({ profile, recentCount, playlistCount, onLogin, onLogout, onViewHistory }: {
+function SettingsView({ profile, recentCount, playlistCount, onLogin, onLogout, onViewHistory, onSaveProfile }: {
   profile?: AppProfile;
   recentCount: number;
   playlistCount: number;
   onLogin: () => void;
   onLogout: () => void;
   onViewHistory: () => void;
+  onSaveProfile: (nickname: string, image?: string) => Promise<void>;
 }) {
   const { volume, setVolume, shuffle, toggleShuffle, repeat, setRepeatMode } = usePlayer();
+  const avatarInput = useRef<HTMLInputElement>(null);
+  const [nickname, setNickname] = useState(profile?.nickname ?? "");
+  const [imageDraft, setImageDraft] = useState<string | undefined>(undefined);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMessage, setProfileMessage] = useState("");
+  useEffect(() => {
+    setNickname(profile?.nickname ?? "");
+    setImageDraft(undefined);
+  }, [profile?.id, profile?.nickname, profile?.image]);
+  const previewProfile = profile ? {
+    ...profile,
+    nickname,
+    image: imageDraft === undefined ? profile.image : imageDraft || profile.image,
+  } : undefined;
+  const saveProfile = async () => {
+    setProfileSaving(true);
+    setProfileMessage("");
+    try {
+      await onSaveProfile(nickname.trim(), imageDraft);
+      setImageDraft(undefined);
+      setProfileMessage("Profile saved.");
+    } catch (error) {
+      setProfileMessage(error instanceof Error ? error.message : "Your profile could not be saved.");
+    } finally {
+      setProfileSaving(false);
+    }
+  };
   return <div className="page settings-page">
     <div className="page-heading"><span className="eyebrow">MAKE IT YOURS</span><h1>Settings</h1><p>Manage your account and playback preferences.</p></div>
     <div className="settings-groups">
       <section className="settings-group">
         <div className="settings-group-head"><UserRound size={17} /><div><h2>Wave Tune account</h2><p>Account details and saved listening activity.</p></div></div>
         <div className="setting-line account-setting-line">
-          <ProfileAvatar profile={profile} large />
-          <span className="account-setting-copy"><strong>{profile?.name ?? "Guest listener"}</strong><small>{profile?.email ?? (profile ? "Signed in to Wave Tune" : "Sign in to sync your music across sessions.")}</small></span>
+          <ProfileAvatar profile={previewProfile} large />
+          <span className="account-setting-copy"><strong>{profile?.nickname || profile?.name || "Guest listener"}</strong><small>{profile?.email ?? (profile ? "Signed in to Wave Tune" : "Sign in to sync your music across sessions.")}</small></span>
           {profile ? <button className="secondary-button" onClick={onLogout}><LogOut size={14} /> Sign out</button> : <button className="primary-button" onClick={onLogin}><LogIn size={14} /> Sign in</button>}
         </div>
+        {profile && <div className="profile-customization">
+          <div className="profile-photo-row">
+            <div><strong>Profile photo</strong><small>Choose an image from your device. It is resized and saved with your Wave Tune profile.</small></div>
+            <div className="profile-photo-actions">
+              <button type="button" className="secondary-button" onClick={() => avatarInput.current?.click()}>Choose photo</button>
+              {imageDraft !== undefined && <button type="button" className="text-button" onClick={() => setImageDraft("")}>Use Google photo</button>}
+            </div>
+            <input ref={avatarInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (!file) return;
+              void optimizeProfileImage(file).then(setImageDraft).catch((error) => setProfileMessage(error instanceof Error ? error.message : "This photo could not be prepared."));
+            }} />
+          </div>
+          <label className="nickname-field"><span><strong>Nickname</strong><small>Shown to other signed-in Wave Tune listeners.</small></span><input maxLength={32} value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder={profile.name} /></label>
+          <div className="profile-save-row">{profileMessage && <span role="status">{profileMessage}</span>}<button type="button" className="primary-button" disabled={profileSaving} onClick={() => void saveProfile()}>{profileSaving ? "Saving…" : "Save profile"}</button></div>
+        </div>}
         <div className="setting-stats">
           <div><strong>{Math.floor((profile?.totalListeningSeconds ?? 0) / 60)}</strong><small>minutes listened</small></div>
           <div><strong>{recentCount}</strong><small>recent songs</small></div>
@@ -371,7 +500,7 @@ function AuthenticatedApp() {
   const [toast, setToast] = useState("");
   const [addTrack, setAddTrack] = useState<Track | null>(null);
   const [createPlaylist, setCreatePlaylist] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const notifiedTrackRef = useRef<string | null>(null);
 
   const loadCatalog = useCallback(() => {
     setCatalogLoading(true);
@@ -410,6 +539,25 @@ function AuthenticatedApp() {
   useEffect(() => {
     if (isSignedIn && account) player.syncLikedIds(account.likedTracks.map((track) => track.id));
   }, [account, isSignedIn, player.syncLikedIds]);
+  useEffect(() => {
+    if (player.playbackError) setToast(player.playbackError);
+  }, [player.playbackError]);
+  useEffect(() => {
+    const track = player.currentTrack;
+    if (!track || notifiedTrackRef.current === track.id) return;
+    notifiedTrackRef.current = track.id;
+    if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+      if (localStorage.getItem("wave-tune:notifications") === "on") {
+        new Notification(`Now playing · ${track.title}`, {
+          body: track.artist,
+          icon: track.artwork || "/favicon.svg",
+        });
+      }
+    } catch {
+      // Browser notification failures should not affect music playback.
+    }
+  }, [player.currentTrack]);
 
   const profile = account?.profile ?? (isSignedIn && user ? {
     id: user.id,
@@ -436,26 +584,45 @@ function AuthenticatedApp() {
   const login = useCallback(() => setLocation("/sign-in"), [setLocation]);
   const logout = useCallback(async () => {
     try {
+      if (isSignedIn) await accountService.updatePresence(false).catch(() => undefined);
       await signOut();
       setAccount(null);
       setLocation("/");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not sign out.");
     }
-  }, [setLocation, signOut]);
+  }, [isSignedIn, setLocation, signOut]);
   const authModalOpen = location.startsWith("/sign-in") || location.startsWith("/sign-up");
   const closeAuthModal = useCallback(() => setLocation("/"), [setLocation]);
   const finishAuth = useCallback(() => {
     setLocation("/");
     setToast("You are signed in to Wave Tune.");
   }, [setLocation]);
-  const importFiles = async (files: FileList | File[]) => {
-    const count = Array.from(files).filter((file) => file.type.startsWith("audio/")).length;
+  const saveProfile = async (nickname: string, image?: string) => {
+    if (!isSignedIn) {
+      login();
+      return;
+    }
+    await accountService.updateProfile(nickname, image);
+    setAccount(await accountService.getSnapshot());
+    setToast("Your profile has been updated.");
+  };
+  const removeRecentTrack = async (track: Track) => {
     try {
-      await player.importFiles(files);
-      setToast(`${count} track${count === 1 ? "" : "s"} added.`);
+      if (isSignedIn) await accountService.removeRecentTrack(track.id);
+      player.removeRecentlyPlayed(track.id);
+      if (isSignedIn) setAccount(await accountService.getSnapshot());
+      setToast(`Removed ${track.title} from your history.`);
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Could not import those audio files.");
+      setToast(error instanceof Error ? error.message : "This song could not be removed.");
+    }
+  };
+  const removeLocalTrack = async (track: Track) => {
+    try {
+      await player.removeLocalTrack(track.id);
+      setToast(`Removed ${track.title} from this device.`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "This song could not be removed.");
     }
   };
   const addToPlaylist = (track: Track) => {
@@ -502,19 +669,35 @@ function AuthenticatedApp() {
       page = <SearchView onAddToPlaylist={addToPlaylist} />;
       break;
     case "library":
-      page = <div className="page"><div className="page-heading split-heading"><div><span className="eyebrow">YOUR MUSIC</span><h1>Library</h1><p>Local files and songs you have discovered in Wave Tune.</p></div><button className="primary-button" onClick={() => fileInputRef.current?.click()}><Upload size={15} /> Import music</button></div>{localTracks.length ? <div className="track-list">{localTracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={localTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Upload size={24} /><h2>Bring your music with you</h2><p>Import local audio files to keep them in this browser.</p><button className="primary-button" onClick={() => fileInputRef.current?.click()}>Import audio files</button></div>}</div>;
+      page = <div className="page library-page">
+        <div className="page-heading"><span className="eyebrow">YOUR MUSIC, ORGANIZED</span><h1>Library</h1><p>Your favorites, listening history, playlists, and music already saved on this device.</p></div>
+        <div className="library-collections">
+          <button type="button" className="library-collection-card" onClick={() => navigate("liked")}><Heart size={19} /><span><strong>Liked songs</strong><small>{likedTracks.length} tracks</small></span><ArrowRight size={16} /></button>
+          <button type="button" className="library-collection-card" onClick={() => navigate("recent")}><Clock3 size={19} /><span><strong>Recently played</strong><small>{recentTracks.length} tracks</small></span><ArrowRight size={16} /></button>
+          <button type="button" className="library-collection-card" onClick={() => navigate("playlists")}><ListMusic size={19} /><span><strong>Playlists</strong><small>{playlists.length} collections</small></span><ArrowRight size={16} /></button>
+        </div>
+        <section className="library-section"><SectionHeader eyebrow="YOUR FAVORITES" title="Liked songs" action="See all" onAction={() => navigate("liked")} />
+          {likedTracks.length ? <div className="track-list">{likedTracks.slice(0, 8).map((track, index) => <TrackRow key={track.id} track={track} index={index} context={likedTracks} onAddToPlaylist={addToPlaylist} onRemove={() => player.toggleLike(track)} removeLabel="Remove from liked songs" />)}</div> : <div className="empty-inline">Like a song from Discover or For you and it will appear here.</div>}
+        </section>
+        <section className="library-section"><SectionHeader eyebrow="PICK UP WHERE YOU LEFT OFF" title="Recently played" action="See all" onAction={() => navigate("recent")} />
+          {recentTracks.length ? <div className="track-list">{recentTracks.slice(0, 8).map((track, index) => <TrackRow key={`${track.id}-${index}`} track={track} index={index} context={recentTracks} onAddToPlaylist={addToPlaylist} onRemove={() => void removeRecentTrack(track)} removeLabel="Remove from listening history" />)}</div> : <div className="empty-inline">Your listening history will appear here after you play a song.</div>}
+        </section>
+        {localTracks.length > 0 && <section className="library-section"><SectionHeader eyebrow="SAVED ON THIS DEVICE" title="On this device" />
+          <div className="track-list">{localTracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={localTracks} onRemove={() => void removeLocalTrack(track)} removeLabel="Remove from this device" />)}</div>
+        </section>}
+      </div>;
       break;
     case "liked":
-      page = <div className="page"><div className="page-heading"><span className="eyebrow">YOUR FAVORITES</span><h1>Liked songs</h1><p>Songs you want to hear again.</p></div>{likedTracks.length ? <div className="track-list">{likedTracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={likedTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Heart size={24} /><h2>Your likes will live here</h2><p>Tap the heart on any track to build this collection.</p></div>}</div>;
+      page = <div className="page"><div className="page-heading"><span className="eyebrow">YOUR FAVORITES</span><h1>Liked songs</h1><p>Songs you want to hear again.</p></div>{likedTracks.length ? <div className="track-list">{likedTracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={likedTracks} onAddToPlaylist={addToPlaylist} onRemove={() => player.toggleLike(track)} removeLabel="Remove from liked songs" />)}</div> : <div className="empty-state"><Heart size={24} /><h2>Your likes will live here</h2><p>Tap the heart on any track to build this collection.</p></div>}</div>;
       break;
     case "recent":
-      page = <div className="page"><div className="page-heading"><span className="eyebrow">YOUR LISTENING</span><h1>Recently played</h1><p>A memory of the songs you have played in Wave Tune.</p></div>{recentTracks.length ? <div className="track-list">{recentTracks.map((track, index) => <TrackRow key={`${track.id}-${index}`} track={track} index={index} context={recentTracks} onAddToPlaylist={addToPlaylist} />)}</div> : <div className="empty-state"><Clock3 size={24} /><h2>Your history is empty</h2><p>Start playing something and it will show up here.</p></div>}</div>;
+      page = <div className="page"><div className="page-heading"><span className="eyebrow">YOUR LISTENING</span><h1>Recently played</h1><p>A memory of the songs you have played in Wave Tune.</p></div>{recentTracks.length ? <div className="track-list">{recentTracks.map((track, index) => <TrackRow key={`${track.id}-${index}`} track={track} index={index} context={recentTracks} onAddToPlaylist={addToPlaylist} onRemove={() => void removeRecentTrack(track)} removeLabel="Remove from listening history" />)}</div> : <div className="empty-state"><Clock3 size={24} /><h2>Your history is empty</h2><p>Start playing something and it will show up here.</p></div>}</div>;
       break;
     case "playlists":
       page = <div className="page"><div className="page-heading split-heading"><div><span className="eyebrow">YOUR COLLECTION</span><h1>Playlists</h1><p>Make space for whatever the day calls for.</p></div><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={15} /> New playlist</button></div>{playlists.length ? <div className="playlist-grid">{playlists.map((playlist) => <motion.button key={playlist.id} className="playlist-card" whileHover={{ y: -4 }} onClick={() => setSelectedPlaylist(playlist)}><PlaylistArtwork playlist={playlist} /><span><strong>{playlist.name}</strong><small>{playlist.description}</small></span><ArrowRight size={15} /></motion.button>)}</div> : <div className="empty-state"><ListMusic size={24} /><h2>Create your first playlist</h2><p>Save live catalog tracks into a private MongoDB-backed collection.</p><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={14} /> New playlist</button></div>}</div>;
       break;
     case "settings":
-      page = <SettingsView profile={profile} recentCount={recentTracks.length} playlistCount={playlists.length} onLogin={login} onLogout={logout} onViewHistory={() => navigate("recent")} />;
+      page = <SettingsView profile={profile} recentCount={recentTracks.length} playlistCount={playlists.length} onLogin={login} onLogout={logout} onViewHistory={() => navigate("recent")} onSaveProfile={saveProfile} />;
       break;
   }
 
@@ -528,17 +711,16 @@ function AuthenticatedApp() {
 
   return <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""} ${authModalOpen ? "auth-modal-open" : ""}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" />
-    <Sidebar activeView={activeView} onNavigate={navigate} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} onImport={() => fileInputRef.current?.click()} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} />
+    <Sidebar activeView={activeView} onNavigate={navigate} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} />
     <main className="main-column">
       <TopBar profile={profile} onSearch={() => navigate("search")} onSettings={() => navigate("settings")} onLogin={login} onMenu={() => setMobileMenuOpen(true)} />
       <AnimatePresence mode="wait" initial={!reduceMotion}><motion.div key={`${activeView}-${selectedPlaylist?.id ?? ""}`} className="view-shell" initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }} transition={{ duration: .24 }}>{activePage}</motion.div></AnimatePresence>
     </main>
-    <ActivityRail recentTracks={recentTracks} />
+    <ActivityRail recentTracks={recentTracks} isSignedIn={isSignedIn} onLogin={login} />
     <DesktopPlayer onExpand={() => setFullPlayerOpen(true)} />
     <MobilePlayer onExpand={() => setFullPlayerOpen(true)} />
     <MobileNav activeView={activeView} onNavigate={navigate} />
-    {mobileMenuOpen && <div className="mobile-drawer-backdrop" onClick={() => setMobileMenuOpen(false)}><div className="mobile-drawer" role="dialog" aria-modal="true" aria-label="Navigation menu" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><WaveLogo /><IconButton label="Close menu" onClick={() => setMobileMenuOpen(false)}><X size={18} /></IconButton></div><Sidebar activeView={activeView} onNavigate={navigate} collapsed={false} setCollapsed={() => undefined} onImport={() => { setMobileMenuOpen(false); fileInputRef.current?.click(); }} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} /></div></div>}
-    <input ref={fileInputRef} hidden type="file" accept="audio/*" multiple onChange={(event) => { if (event.target.files?.length) void importFiles(event.target.files); event.target.value = ""; }} />
+    {mobileMenuOpen && <div className="mobile-drawer-backdrop" onClick={() => setMobileMenuOpen(false)}><div className="mobile-drawer" role="dialog" aria-modal="true" aria-label="Navigation menu" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><WaveLogo /><IconButton label="Close menu" onClick={() => setMobileMenuOpen(false)}><X size={18} /></IconButton></div><Sidebar activeView={activeView} onNavigate={navigate} collapsed={false} setCollapsed={() => undefined} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} /></div></div>}
     {toast && <motion.div className="toast" initial={{ y: 18, opacity: 0 }} animate={{ y: 0, opacity: 1 }} onClick={() => setToast("")}><Check size={15} /> {toast}</motion.div>}
     <AnimatePresence>
       {fullPlayerOpen && <FullPlayer onClose={() => setFullPlayerOpen(false)} />}
