@@ -50,6 +50,7 @@ type PlayerContextValue = {
   playNext: (track: Track) => void;
   removeFromQueue: (id: string) => void;
   clearQueue: () => void;
+  removeRecentlyPlayed: (id: string) => void;
   toggleLike: (track: Track) => void;
   importFiles: (files: FileList | File[]) => Promise<void>;
   clearLibrary: () => Promise<void>;
@@ -242,7 +243,7 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const playTrack = useCallback(async (track: Track, context?: Track[], preserveQueue = false) => {
+  const playTrack = useCallback(async (track: Track, context?: Track[]) => {
     if (!authRef.current) {
       const played = readStored<string[]>("wave-tune:guest-played", []);
       if (!played.includes(track.id) && played.length >= 5) {
@@ -259,7 +260,6 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     audioRef.current?.pause();
     if (context?.length) {
       playContextRef.current = context;
-      if (!preserveQueue) setQueue(context.filter((item) => item.id !== track.id));
     } else if (!playContextRef.current.length) {
       playContextRef.current = [...library, track];
     }
@@ -392,12 +392,8 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       togglePlay();
       return;
     }
-    if (activeTrack && isPlayingRef.current) {
-      addToQueue(track);
-      return;
-    }
-    void playTrack(track, context);
-  }, [addToQueue, playTrack, togglePlay]);
+    void playTrack(track, context?.length ? context : [track]);
+  }, [playTrack, togglePlay]);
   const playQueueTrack = useCallback((track: Track) => {
     const index = queueRef.current.findIndex((item) => item.id === track.id);
     setQueue((items) => index >= 0 ? items.slice(index + 1) : items.filter((item) => item.id !== track.id));
@@ -411,6 +407,13 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   }, []);
   const removeFromQueue = (id: string) => setQueue((items) => items.filter((track) => track.id !== id));
   const clearQueue = () => setQueue([]);
+  const removeRecentlyPlayed = useCallback((id: string) => {
+    setRecentlyPlayed((items) => {
+      const next = items.filter((trackId) => trackId !== id);
+      writeStored("recent", next);
+      return next;
+    });
+  }, []);
   const toggleLike = (track: Track) => {
     setLikedIds((items) => {
       const next = items.includes(track.id) ? items.filter((id) => id !== track.id) : [track.id, ...items];
@@ -456,14 +459,14 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       likedIds, recentlyPlayed, shuffle, repeat, playbackError,
       playTrack, requestTrack, playQueueTrack, togglePlay, next,
       previous, seek, setVolume, toggleShuffle, cycleRepeat, setRepeatMode, addToQueue, playNext, removeFromQueue,
-      clearQueue, toggleLike, syncLikedIds, importFiles, clearLibrary,
+      clearQueue, removeRecentlyPlayed, toggleLike, syncLikedIds, importFiles, clearLibrary,
     }),
     [
       currentTrack, isPlaying, isLoading, currentTime, duration, volume, queue, library,
       likedIds, recentlyPlayed, shuffle, repeat, playbackError, playTrack, requestTrack,
       playQueueTrack, togglePlay, next, previous, seek, setVolume, toggleShuffle,
       cycleRepeat, setRepeatMode, addToQueue, playNext, removeFromQueue,
-      clearQueue, toggleLike, syncLikedIds, importFiles, clearLibrary,
+      clearQueue, removeRecentlyPlayed, toggleLike, syncLikedIds, importFiles, clearLibrary,
     ],
   );
 
