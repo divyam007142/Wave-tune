@@ -27,7 +27,7 @@ async function search(query: string, signal?: AbortSignal): Promise<SearchResult
 
 export const catalogService = {
   async trending() {
-    const result = await search("popular songs official audio");
+    const result = await search("trending songs official audio");
     return { tracks: result.tracks };
   },
 
