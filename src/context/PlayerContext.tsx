@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { clearLocalTracks, loadLocalTracks, readStored, saveLocalTrack, writeStored } from "../services/storage";
+import { loadLocalTracks, readStored, removeLocalTrack as removeStoredLocalTrack, writeStored } from "../services/storage";
 import { youtubePlaybackProvider } from "../services/youtube";
 import type { Track } from "../types/music";
 
@@ -52,15 +52,10 @@ type PlayerContextValue = {
   clearQueue: () => void;
   removeRecentlyPlayed: (id: string) => void;
   toggleLike: (track: Track) => void;
-  importFiles: (files: FileList | File[]) => Promise<void>;
-  clearLibrary: () => Promise<void>;
+  removeLocalTrack: (trackId: string) => Promise<void>;
 };
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
-
-function formatImportedName(name: string) {
-  return name.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").trim() || "Untitled track";
-}
 
 export function PlayerProvider({ children, isAuthenticated = false, onRequireAuth, onPlaybackEvent, onLikeEvent }: PlayerProviderProps) {
   const [library, setLibrary] = useState<Track[]>([]);
@@ -424,34 +419,16 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   };
   const syncLikedIds = useCallback((ids: string[]) => setLikedIds([...new Set(ids)]), []);
 
-  const importFiles = async (files: FileList | File[]) => {
-    const imported = await Promise.all(
-      Array.from(files)
-        .filter((file) => file.type.startsWith("audio/"))
-        .map(async (file, index) => {
-          const track: Track = {
-            id: `local-${file.name}-${file.lastModified}-${index}`,
-            title: formatImportedName(file.name),
-            artist: "Local file",
-            album: "Your library",
-            duration: 0,
-            artwork: "",
-            accent: "#c5f269",
-            audioUrl: URL.createObjectURL(file),
-            source: "local",
-            addedAt: Date.now(),
-          };
-          await saveLocalTrack(track, file);
-          return track;
-        }),
-    );
-    setLibrary((items) => [...imported, ...items]);
-  };
-
-  const clearLibrary = async () => {
-    await clearLocalTracks();
-    setLibrary([]);
-  };
+  const removeLocalTrack = useCallback(async (trackId: string) => {
+    await removeStoredLocalTrack(trackId);
+    const track = library.find((item) => item.id === trackId);
+    if (track?.audioUrl?.startsWith("blob:")) URL.revokeObjectURL(track.audioUrl);
+    setLibrary((items) => items.filter((item) => item.id !== trackId));
+    if (currentTrackRef.current?.id === trackId) {
+      audioRef.current?.pause();
+      setCurrentTrack(null);
+    }
+  }, [library]);
 
   const value = useMemo(
     () => ({
@@ -459,14 +436,14 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       likedIds, recentlyPlayed, shuffle, repeat, playbackError,
       playTrack, requestTrack, playQueueTrack, togglePlay, next,
       previous, seek, setVolume, toggleShuffle, cycleRepeat, setRepeatMode, addToQueue, playNext, removeFromQueue,
-      clearQueue, removeRecentlyPlayed, toggleLike, syncLikedIds, importFiles, clearLibrary,
+      clearQueue, removeRecentlyPlayed, toggleLike, syncLikedIds, removeLocalTrack,
     }),
     [
       currentTrack, isPlaying, isLoading, currentTime, duration, volume, queue, library,
       likedIds, recentlyPlayed, shuffle, repeat, playbackError, playTrack, requestTrack,
       playQueueTrack, togglePlay, next, previous, seek, setVolume, toggleShuffle,
       cycleRepeat, setRepeatMode, addToQueue, playNext, removeFromQueue,
-      clearQueue, removeRecentlyPlayed, toggleLike, syncLikedIds, importFiles, clearLibrary,
+      clearQueue, removeRecentlyPlayed, toggleLike, syncLikedIds, removeLocalTrack,
     ],
   );
 
