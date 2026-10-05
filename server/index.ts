@@ -90,7 +90,7 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/catalog/trending", async (_request, response) => {
   try {
-    const results = await searchYouTube("popular songs official audio");
+    const results = await searchYouTube("trending songs official audio");
     response.json({ tracks: results.map(catalogTrack) });
   } catch (error) {
     console.error("YouTube recommendations failed:", error instanceof Error ? error.name : "unknown error");
