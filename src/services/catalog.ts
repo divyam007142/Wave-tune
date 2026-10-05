@@ -1,20 +1,35 @@
 import type { SearchResult, Track } from "../types/music";
+import { youtubePlaybackProvider } from "./youtube";
 
-async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(path, { credentials: "same-origin", signal });
-  const payload = (await response.json().catch(() => ({}))) as { error?: string };
-  if (!response.ok) {
-    throw new Error(payload.error || `Music catalog request failed (${response.status}).`);
-  }
-  return payload as T;
+function toTrack(result: Awaited<ReturnType<typeof youtubePlaybackProvider.search>>[number]): Track {
+  return {
+    id: result.videoId,
+    youtubeVideoId: result.videoId,
+    title: result.title,
+    artist: result.uploader || "Unknown artist",
+    album: "YouTube",
+    duration: result.duration,
+    artwork: result.thumbnail,
+    accent: "#557c48",
+    source: "catalog",
+  };
+}
+
+async function search(query: string, signal?: AbortSignal): Promise<SearchResult> {
+  const results = await youtubePlaybackProvider.search(query, signal);
+  return {
+    tracks: results.map(toTrack),
+    albums: [],
+    artists: [],
+    playlists: [],
+  };
 }
 
 export const catalogService = {
-  trending() {
-    return request<{ tracks: Track[]; notice?: string }>("/api/catalog/trending");
+  async trending() {
+    const result = await search("popular songs official audio");
+    return { tracks: result.tracks };
   },
 
-  search(query: string, signal?: AbortSignal) {
-    return request<SearchResult>(`/api/catalog/search?q=${encodeURIComponent(query)}`, signal);
-  },
+  search,
 };
