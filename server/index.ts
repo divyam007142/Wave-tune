@@ -4,12 +4,26 @@ import type { RequestHandler } from "express";
 import { authRouter } from "./authRoutes";
 import { accountRouter } from "./accountRoutes";
 import { DatabaseUnavailableError, isMongoConfigured } from "./database";
-import { getTrendingTracks, searchSpotify } from "./spotifyCatalog";
-import { searchYouTube } from "./youtube";
+import type { Track } from "../src/types/music";
+import { getYouTubeStream, searchYouTube, type YouTubeResult } from "./youtube";
 
 const app = express();
 const port = Number(process.env.PORT ?? 5000);
 app.set("trust proxy", true);
+
+function catalogTrack(result: YouTubeResult): Track {
+  return {
+    id: result.videoId,
+    youtubeVideoId: result.videoId,
+    title: result.title,
+    artist: result.uploader,
+    album: "YouTube",
+    duration: result.duration,
+    artwork: result.thumbnail,
+    accent: "#557c48",
+    source: "catalog",
+  };
+}
 const allowedOrigins = (process.env.FRONTEND_ORIGIN ?? "")
   .split(",")
   .map((origin) => origin.trim().replace(/\/+$/, ""))
@@ -76,10 +90,11 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/catalog/trending", async (_request, response) => {
   try {
-    response.json(await getTrendingTracks());
+    const results = await searchYouTube("popular songs official audio");
+    response.json({ tracks: results.map(catalogTrack) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Spotify catalog is unavailable.";
-    response.status(502).json({ error: message });
+    console.error("YouTube recommendations failed:", error instanceof Error ? error.name : "unknown error");
+    response.status(502).json({ error: "YouTube recommendations are temporarily unavailable." });
   }
 });
 
@@ -90,10 +105,44 @@ app.get("/api/catalog/search", async (request, response) => {
     return;
   }
   try {
-    response.json(await searchSpotify(query));
+    const tracks = (await searchYouTube(query)).map(catalogTrack);
+    response.json({ tracks, albums: [], artists: [], playlists: [] });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Spotify search is unavailable.";
-    response.status(502).json({ error: message });
+    console.error("YouTube catalog search failed:", error instanceof Error ? error.name : "unknown error");
+    response.status(502).json({ error: "YouTube search is temporarily unavailable." });
+  }
+});
+
+app.get("/api/search", async (request, response) => {
+  const query = String(request.query.q ?? "").trim().slice(0, 160);
+  if (!query) {
+    response.status(400).json({ error: "Enter a song, artist, or mood to search." });
+    return;
+  }
+
+  try {
+    response.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=240");
+    response.json({ results: await searchYouTube(query) });
+  } catch (error) {
+    console.error("YouTube search failed:", error instanceof Error ? error.name : "unknown error");
+    response.status(502).json({ error: "YouTube search is temporarily unavailable. Please try again." });
+  }
+});
+
+app.get("/api/stream/:videoId", async (request, response) => {
+  const videoId = String(request.params.videoId ?? "");
+  if (!/^[\w-]{11}$/.test(videoId)) {
+    response.status(400).json({ error: "That YouTube video ID is invalid." });
+    return;
+  }
+
+  try {
+    const audioUrl = await getYouTubeStream(videoId);
+    response.setHeader("Cache-Control", "private, max-age=60");
+    response.json({ videoId, audioUrl, expiresIn: 240 });
+  } catch (error) {
+    console.error("YouTube audio stream resolution failed:", error instanceof Error ? error.name : "unknown error");
+    response.status(502).json({ error: "This song's audio stream could not be prepared. Try another result." });
   }
 });
 
@@ -107,7 +156,7 @@ app.get("/api/youtube/search", async (request, response) => {
   try {
     response.json({ results: await searchYouTube(query) });
   } catch (error) {
-    console.error("YouTube search failed", error);
+    console.error("YouTube search failed:", error instanceof Error ? error.name : "unknown error");
     response.status(502).json({ error: "YouTube search is unavailable." });
   }
 });
