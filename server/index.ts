@@ -41,15 +41,25 @@ const verifySameOrigin: RequestHandler = (request, response, next) => {
   }
   const forwardedHost = request.get("x-forwarded-host")?.split(",")[0].trim();
   const host = request.get("host");
-  const proto = request.get("x-forwarded-proto")?.split(",")[0].trim()
-    || (request.secure ? "https" : "http");
-  const requestHosts = [forwardedHost, host].filter((value): value is string => Boolean(value));
-  const sameOrigin = allowedOrigins.includes(origin)
-    || requestHosts.some((requestHost) =>
-      [`${proto}://${requestHost}`, `https://${requestHost}`, `http://${requestHost}`].includes(origin),
+  const proto =
+    request.get("x-forwarded-proto")?.split(",")[0].trim() ||
+    (request.secure ? "https" : "http");
+  const requestHosts = [forwardedHost, host].filter((value): value is string =>
+    Boolean(value),
+  );
+  const sameOrigin =
+    allowedOrigins.includes(origin) ||
+    requestHosts.some((requestHost) =>
+      [
+        `${proto}://${requestHost}`,
+        `https://${requestHost}`,
+        `http://${requestHost}`,
+      ].includes(origin),
     );
   if (!sameOrigin) {
-    response.status(403).json({ error: "This request did not come from Wave Tune." });
+    response
+      .status(403)
+      .json({ error: "This request did not come from Wave Tune." });
     return;
   }
   next();
@@ -60,7 +70,10 @@ app.use((request, response, next) => {
   if (origin && allowedOrigins.includes(origin)) {
     response.setHeader("Access-Control-Allow-Origin", origin);
     response.setHeader("Access-Control-Allow-Credentials", "true");
-    response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    response.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PATCH, DELETE, OPTIONS",
+    );
     response.setHeader("Access-Control-Allow-Headers", "Content-Type");
     response.setHeader("Vary", "Origin");
   }
@@ -80,7 +93,6 @@ app.get("/api/health", (_request, response) => {
     status: "ok",
     services: {
       mongodbConfigured: isMongoConfigured(),
-      spotifyConfigured: Boolean(process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET),
       authenticationConfigured: isMongoConfigured(),
       googleSignInConfigured: Boolean(process.env.GOOGLE_CLIENT_ID?.trim()),
       passwordSignInConfigured: isMongoConfigured(),
@@ -93,39 +105,67 @@ app.get("/api/catalog/trending", async (_request, response) => {
     const results = await searchYouTube("trending songs official audio");
     response.json({ tracks: results.map(catalogTrack) });
   } catch (error) {
-    console.error("YouTube recommendations failed:", error instanceof Error ? error.name : "unknown error");
-    response.status(502).json({ error: "YouTube recommendations are temporarily unavailable." });
+    console.error(
+      "YouTube recommendations failed:",
+      error instanceof Error ? error.name : "unknown error",
+    );
+    response
+      .status(502)
+      .json({ error: "YouTube recommendations are temporarily unavailable." });
   }
 });
 
 app.get("/api/catalog/search", async (request, response) => {
-  const query = String(request.query.q ?? "").trim().slice(0, 160);
+  const query = String(request.query.q ?? "")
+    .trim()
+    .slice(0, 160);
   if (!query) {
-    response.status(400).json({ error: "Enter a song, artist, album, or playlist to search." });
+    response
+      .status(400)
+      .json({ error: "Enter a song, artist, album, or playlist to search." });
     return;
   }
   try {
     const tracks = (await searchYouTube(query)).map(catalogTrack);
     response.json({ tracks, albums: [], artists: [], playlists: [] });
   } catch (error) {
-    console.error("YouTube catalog search failed:", error instanceof Error ? error.name : "unknown error");
-    response.status(502).json({ error: "YouTube search is temporarily unavailable." });
+    console.error(
+      "YouTube catalog search failed:",
+      error instanceof Error ? error.name : "unknown error",
+    );
+    response
+      .status(502)
+      .json({ error: "YouTube search is temporarily unavailable." });
   }
 });
 
 app.get("/api/search", async (request, response) => {
-  const query = String(request.query.q ?? "").trim().slice(0, 160);
+  const query = String(request.query.q ?? "")
+    .trim()
+    .slice(0, 160);
   if (!query) {
-    response.status(400).json({ error: "Enter a song, artist, or mood to search." });
+    response
+      .status(400)
+      .json({ error: "Enter a song, artist, or mood to search." });
     return;
   }
 
   try {
-    response.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=240");
+    response.setHeader(
+      "Cache-Control",
+      "public, max-age=60, stale-while-revalidate=240",
+    );
     response.json({ results: await searchYouTube(query) });
   } catch (error) {
-    console.error("YouTube search failed:", error instanceof Error ? error.name : "unknown error");
-    response.status(502).json({ error: "YouTube search is temporarily unavailable. Please try again." });
+    console.error(
+      "YouTube search failed:",
+      error instanceof Error ? error.name : "unknown error",
+    );
+    response
+      .status(502)
+      .json({
+        error: "YouTube search is temporarily unavailable. Please try again.",
+      });
   }
 });
 
@@ -141,8 +181,16 @@ app.get("/api/stream/:videoId", async (request, response) => {
     response.setHeader("Cache-Control", "private, max-age=60");
     response.json({ videoId, audioUrl, expiresIn: 240 });
   } catch (error) {
-    console.error("YouTube audio stream resolution failed:", error instanceof Error ? error.name : "unknown error");
-    response.status(502).json({ error: "This song's audio stream could not be prepared. Try another result." });
+    console.error(
+      "YouTube audio stream resolution failed:",
+      error instanceof Error ? error.name : "unknown error",
+    );
+    response
+      .status(502)
+      .json({
+        error:
+          "This song's audio stream could not be prepared. Try another result.",
+      });
   }
 });
 
@@ -156,7 +204,10 @@ app.get("/api/youtube/search", async (request, response) => {
   try {
     response.json({ results: await searchYouTube(query) });
   } catch (error) {
-    console.error("YouTube search failed:", error instanceof Error ? error.name : "unknown error");
+    console.error(
+      "YouTube search failed:",
+      error instanceof Error ? error.name : "unknown error",
+    );
     response.status(502).json({ error: "YouTube search is unavailable." });
   }
 });
@@ -164,12 +215,16 @@ app.get("/api/youtube/search", async (request, response) => {
 app.use("/api/auth", authRouter);
 app.use("/api/account", accountRouter);
 app.use("/api", (_request, response) => {
-  response.status(404).json({ error: "That Wave Tune API route does not exist." });
+  response
+    .status(404)
+    .json({ error: "That Wave Tune API route does not exist." });
 });
 
 if (process.env.NODE_ENV === "production") {
   app.use(express.static("dist"));
-  app.get("/*splat", (_request, response) => response.sendFile("dist/index.html", { root: process.cwd() }));
+  app.get("/*splat", (_request, response) =>
+    response.sendFile("dist/index.html", { root: process.cwd() }),
+  );
 } else {
   const vite = await createViteServer({
     server: { middlewareMode: true, hmr: { port: 5001 } },
@@ -178,17 +233,34 @@ if (process.env.NODE_ENV === "production") {
   app.use(vite.middlewares);
 }
 
-app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-  if (error instanceof DatabaseUnavailableError) {
-    response.status(503).json({ error: error.message });
-    return;
-  }
-  if (process.env.NODE_ENV !== "production" && error instanceof Error) {
-    console.error("Wave Tune request failed:", error.stack ?? error.message);
-  } else {
-    console.error("Wave Tune request failed:", error instanceof Error ? error.name : "unknown error");
-  }
-  response.status(500).json({ error: "Wave Tune could not complete that request. Check the service configuration." });
-});
+app.use(
+  (
+    error: unknown,
+    _request: express.Request,
+    response: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    if (error instanceof DatabaseUnavailableError) {
+      response.status(503).json({ error: error.message });
+      return;
+    }
+    if (process.env.NODE_ENV !== "production" && error instanceof Error) {
+      console.error("Wave Tune request failed:", error.stack ?? error.message);
+    } else {
+      console.error(
+        "Wave Tune request failed:",
+        error instanceof Error ? error.name : "unknown error",
+      );
+    }
+    response
+      .status(500)
+      .json({
+        error:
+          "Wave Tune could not complete that request. Check the service configuration.",
+      });
+  },
+);
 
-app.listen(port, "0.0.0.0", () => console.log(`Wave Tune server listening on ${port}`));
+app.listen(port, "0.0.0.0", () =>
+  console.log(`Wave Tune server listening on ${port}`),
+);
