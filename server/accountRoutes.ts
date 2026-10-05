@@ -63,6 +63,9 @@ function normalizeTrack(value: unknown): Track | null {
     artwork: safeArtwork(track.artwork),
     accent: /^#[\da-f]{6}$/i.test(accent) ? accent : "#caff5c",
     source,
+    youtubeVideoId: /^[\w-]{11}$/.test(stringValue(track.youtubeVideoId, 20))
+      ? stringValue(track.youtubeVideoId, 20)
+      : undefined,
   };
 }
 
