@@ -67,7 +67,7 @@ function thumbnailFrom(entry: SearchEntry) {
 }
 
 async function searchYouTubeUncached(query: string): Promise<YouTubeResult[]> {
-  const payload = await ytdlp(`ytsearch10:${query}`, {
+  const payload = await ytdlp(`ytsearch15:${query}`, {
     dumpSingleJson: true,
     flatPlaylist: true,
     skipDownload: true,
