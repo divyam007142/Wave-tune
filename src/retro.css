@@ -144,6 +144,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--green); out
 .reference-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 .reference-section-heading h1, .reference-section-heading h2 { margin-top: 6px; font-size: clamp(17px, 2vw, 22px); letter-spacing: -.08em; line-height: 1.2; }
 .reference-section-heading > span { color: var(--muted); font-size: 8px; }
+.reference-trending-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 10px; }
 .reference-release-layout { display: grid; grid-template-columns: minmax(175px, 235px) minmax(0, 1fr); gap: 16px; padding: 11px; border: 1px solid var(--ink); border-radius: 0; background: var(--paper-light); box-shadow: var(--shadow); }
 .reference-featured-cover { position: relative; height: auto; aspect-ratio: 1; overflow: hidden; border: 1px solid var(--ink); border-radius: 0; box-shadow: none; }
 .reference-featured-cover .artwork { width: 100%; height: 100%; }
@@ -399,6 +400,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--green); out
   .reference-section-heading { align-items: flex-end; }
   .reference-section-heading h1, .reference-section-heading h2 { font-size: 17px; }
   .reference-section-heading > span { max-width: 118px; text-align: right; line-height: 1.5; }
+  .reference-trending-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .reference-release-layout { grid-template-columns: 106px minmax(0,1fr); gap: 9px; padding: 7px; }
   .reference-featured-cover { height: 106px; }
   .reference-track-list .track-row { min-height: 43px; grid-template-columns: 18px minmax(0,1fr) 27px; gap: 3px; padding: 3px 2px; }
