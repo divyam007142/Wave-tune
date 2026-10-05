@@ -469,3 +469,107 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--green); out
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 
+.search-input-wrap > input {
+  min-height: 28px;
+  padding: 3px 7px;
+  border: 1px solid #b4b49f;
+  color: #22251e !important;
+  -webkit-text-fill-color: #22251e;
+  background-color: #f6f2e7 !important;
+  color-scheme: light;
+}
+.search-input-wrap > input::placeholder { color: #626555 !important; opacity: 1; }
+.search-input-wrap > input:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px #f6f2e7 inset;
+  -webkit-text-fill-color: #22251e;
+}
+.sidebar .nav-item:hover,
+.sidebar .nav-item:hover span,
+.sidebar .nav-item:hover svg {
+  color: #22251e !important;
+}
+.sidebar .nav-item:hover {
+  border-color: #22251e;
+  background: #caff5c !important;
+}
+.your-activity-row { position: relative; }
+.activity-menu-anchor { position: relative; flex: 0 0 auto; }
+.activity-menu-trigger {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid transparent;
+  color: var(--muted);
+  background: transparent;
+}
+.activity-menu-trigger:hover,
+.activity-menu-trigger[aria-expanded="true"] {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: #dfe5d6;
+}
+.activity-menu {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  width: 158px;
+  padding: 4px;
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  background: var(--paper-light);
+  box-shadow: 3px 3px 0 rgba(34, 37, 30, .17);
+}
+.activity-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 31px;
+  padding: 5px 7px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+  font-size: 9px;
+}
+.activity-menu button:hover,
+.activity-menu button:focus-visible {
+  color: var(--ink);
+  background: #dbe4d1;
+  outline: none;
+}
+.your-activity-row strong { font-size: 9px; }
+.your-activity-row small { font-size: 8px; }
+.settings-groups { display: grid; }
+.settings-group-head { display: flex; align-items: flex-start; }
+.settings-group-head > div { display: grid; gap: 4px; }
+.settings-group-head p,
+.setting-line small { font-size: 9px; }
+.setting-line strong { font-size: 10px; }
+.account-setting-line { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.profile-avatar-image.large,
+.profile-avatar.large { width: 38px; height: 38px; flex: 0 0 auto; }
+.profile-avatar.large { display: grid; place-items: center; font-size: 11px; }
+.account-setting-copy { min-width: 0; display: grid; gap: 4px; }
+.account-setting-copy strong,
+.account-setting-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setting-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
+.setting-stats > div { display: grid; gap: 4px; }
+.setting-stats strong { color: var(--ink); font: 700 14px "Space Mono", monospace; }
+.setting-stats small { color: var(--muted); font-size: 8px; }
+.setting-range-line { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, .75fr) 38px; align-items: center; gap: 12px; }
+.setting-range-line > span:first-child { display: grid; gap: 4px; }
+.setting-range-line input { width: 100%; accent-color: var(--green-dark); }
+.setting-select { min-width: 122px; padding: 7px 25px 7px 8px; border: 1px solid var(--line-strong); border-radius: 0; color: var(--ink); background: var(--paper); font: 9px "DM Mono", monospace; }
+.settings-group .toggle { flex: 0 0 auto; }
+.settings-group .secondary-button,
+.settings-group .primary-button { min-height: 31px; }
+@media (max-width: 520px) {
+  .account-setting-line { grid-template-columns: 38px minmax(0, 1fr); }
+  .account-setting-line > .primary-button,
+  .account-setting-line > .secondary-button { grid-column: 2; justify-self: start; }
+  .setting-range-line { grid-template-columns: minmax(0, 1fr) 38px; }
+  .setting-range-line input { grid-column: 1; grid-row: 2; }
+  .setting-range-line .setting-value { grid-column: 2; grid-row: 1 / 3; }
+}
