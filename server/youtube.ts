@@ -33,6 +33,7 @@ const searchCache = new Map<string, CacheEntry<YouTubeResult[]>>();
 const streamCache = new Map<string, CacheEntry<string>>();
 const pendingSearches = new Map<string, Promise<YouTubeResult[]>>();
 const pendingStreams = new Map<string, Promise<string>>();
+const compilationTitle = /\b(?:playlist|jukebox|medley|compilation|full album|full movie|non[\s-]?stop|greatest hits|top\s+\d+\s+(?:songs|hits|tracks)|\d{2}s?\s+(?:songs|hits))\b/i;
 
 function readCache<T>(cache: Map<string, CacheEntry<T>>, key: string) {
   const entry = cache.get(key);
@@ -123,6 +124,30 @@ export async function searchYouTube(query: string): Promise<YouTubeResult[]> {
   } finally {
     if (pendingSearches.get(cacheKey) === pending) pendingSearches.delete(cacheKey);
   }
+}
+
+export function selectTrendingSongs(results: YouTubeResult[]): YouTubeResult[] {
+  const seen = new Set<string>();
+  return results.filter((result) => {
+    if (
+      !validVideoId(result.videoId)
+      || result.duration < 45
+      || result.duration > 600
+      || compilationTitle.test(result.title)
+      || seen.has(result.videoId)
+    ) return false;
+    seen.add(result.videoId);
+    return true;
+  }).slice(0, 10);
+}
+
+export async function getTrendingYouTube(): Promise<YouTubeResult[]> {
+  const year = new Date().getUTCFullYear();
+  const [trendingResults, newSongResults] = await Promise.all([
+    searchYouTube("trending songs official music video"),
+    searchYouTube(`new songs official music video ${year}`),
+  ]);
+  return selectTrendingSongs([...trendingResults, ...newSongResults]);
 }
 
 async function resolveStreamUncached(videoId: string): Promise<string> {
