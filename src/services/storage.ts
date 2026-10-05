@@ -74,3 +74,14 @@ export async function clearLocalTracks() {
   });
   db.close();
 }
+
+export async function removeLocalTrack(trackId: string) {
+  if (!("indexedDB" in window)) return;
+  const db = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const request = db.transaction(storeName, "readwrite").objectStore(storeName).delete(trackId);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+}
