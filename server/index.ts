@@ -3,6 +3,7 @@ import { createServer as createViteServer } from "vite";
 import type { RequestHandler } from "express";
 import { authRouter } from "./authRoutes";
 import { accountRouter } from "./accountRoutes";
+import { pushRouter } from "./pushRoutes";
 import { DatabaseUnavailableError, isMongoConfigured } from "./database";
 import type { Track } from "../src/types/music";
 import {
@@ -108,6 +109,7 @@ app.use((request, response, next) => {
 app.use(express.json({ limit: "1mb" }));
 app.use("/api/auth", verifySameOrigin);
 app.use("/api/account", verifySameOrigin);
+app.use("/api/push", verifySameOrigin, pushRouter);
 
 app.get("/api/health", (_request, response) => {
   response.json({
