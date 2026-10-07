@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
+import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 type GoogleCredentialResponse = { credential?: string };
@@ -61,6 +62,7 @@ export function AuthModal({ onClose, onSuccess }: { onClose: () => void; onSucce
   const [mode, setMode] = useState<"signin" | "register">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [busyAction, setBusyAction] = useState<"google" | "password" | null>(null);
   const busy = busyAction !== null;
@@ -239,25 +241,37 @@ export function AuthModal({ onClose, onSuccess }: { onClose: () => void; onSucce
               disabled={busy}
             />
           </label>
-          <label className="auth-field" htmlFor="auth-password">
+          <label className="auth-field">
             <span>Password</span>
-            <input
-              id="auth-password"
-              name="password"
-              type="password"
-              autoComplete={mode === "register" ? "new-password" : "current-password"}
-              placeholder="Enter your password"
-              maxLength={128}
-              value={password}
-              onChange={(event) => {
-                setPassword(event.target.value);
-                if (error) setError("");
-              }}
-              aria-invalid={mode === "register" && password.length > 0 && password.length < 12}
-              aria-describedby={mode === "register" ? "auth-password-help" : undefined}
-              required
-              disabled={busy}
-            />
+            <span className="password-input-wrap">
+              <input
+                id="auth-password"
+                name="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete={mode === "register" ? "new-password" : "current-password"}
+                placeholder="Enter your password"
+                maxLength={128}
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  if (error) setError("");
+                }}
+                aria-invalid={mode === "register" && password.length > 0 && password.length < 12}
+                aria-describedby={mode === "register" ? "auth-password-help" : undefined}
+                required
+                disabled={busy}
+              />
+              <button
+                type="button"
+                className="password-visibility"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((visible) => !visible)}
+                disabled={busy}
+              >
+                {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </span>
           </label>
           {mode === "register" && (
             <p className="auth-password-help" id="auth-password-help">
