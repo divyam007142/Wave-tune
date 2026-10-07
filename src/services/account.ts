@@ -26,6 +26,31 @@ export type AccountSnapshot = {
   recentTracks: Track[];
 };
 
+export type TimeCapsuleStats = {
+  days: 7 | 30;
+  timeZone: string;
+  today: string;
+  startDay: string;
+  allTimeSeconds: number;
+  periodSeconds: number;
+  todaySeconds: number;
+  totalPlays: number;
+  repeats: number;
+  activeDays: number;
+  currentStreak: number;
+  daily: { day: string; seconds: number; plays: number }[];
+  mostPlayed: (Track & { plays: number; repeats: number; seconds: number }) | null;
+  topTracks: (Track & { plays: number; repeats: number; seconds: number })[];
+};
+
+function localTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -50,8 +75,13 @@ export const accountService = {
   savePlayback(track: Track, seconds: number) {
     return request<{ ok: true }>("/api/account/playback", {
       method: "POST",
-      body: JSON.stringify({ track, seconds }),
+      body: JSON.stringify({ track, seconds, timeZone: localTimeZone() }),
     });
+  },
+
+  getTimeCapsule(days: 7 | 30) {
+    const params = new URLSearchParams({ days: String(days), timeZone: localTimeZone() });
+    return request<TimeCapsuleStats>(`/api/account/time-capsule?${params}`);
   },
 
   updateProfile(nickname: string, image?: string) {
