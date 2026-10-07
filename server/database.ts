@@ -56,6 +56,9 @@ export async function getDatabase(): Promise<Db> {
           { accountId: 1, day: 1, trackId: 1 },
           { unique: true },
         );
+        const pushSubscriptions = database.collection("push_subscriptions");
+        await pushSubscriptions.createIndex({ endpointHash: 1 }, { unique: true });
+        await pushSubscriptions.createIndex({ accountId: 1, updatedAt: -1 });
         retryDatabaseAfter = 0;
         return database;
       })
