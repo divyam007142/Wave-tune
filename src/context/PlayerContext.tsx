@@ -10,6 +10,7 @@ import {
 } from "react";
 import { loadLocalTracks, readStored, removeLocalTrack as removeStoredLocalTrack, writeStored } from "../services/storage";
 import { youtubePlaybackProvider } from "../services/youtube";
+import { useMediaSession } from "../hooks/useMediaSession";
 import type { Track } from "../types/music";
 
 type PlayerProviderProps = {
@@ -20,6 +21,8 @@ type PlayerProviderProps = {
   onLikeEvent?: (track: Track) => void;
 };
 type RepeatMode = "off" | "all" | "one";
+type SleepTimerMinutes = 0 | 15 | 30 | 45;
+type AutoplayRecommendationProvider = (track: Track, excludeIds: string[]) => Promise<Track[]>;
 type PlayerContextValue = {
   currentTrack: Track | null;
   isPlaying: boolean;
@@ -31,8 +34,11 @@ type PlayerContextValue = {
   library: Track[];
   likedIds: string[];
   recentlyPlayed: string[];
+  recentTrackHistory: Track[];
   shuffle: boolean;
   repeat: RepeatMode;
+  sleepTimerMinutes: SleepTimerMinutes;
+  sleepTimerRemainingSeconds: number;
   playbackError: string | null;
   playTrack: (track: Track, context?: Track[]) => void;
   requestTrack: (track: Track, context?: Track[]) => void;
@@ -45,6 +51,8 @@ type PlayerContextValue = {
   toggleShuffle: () => void;
   cycleRepeat: () => void;
   setRepeatMode: (mode: RepeatMode) => void;
+  setSleepTimer: (minutes: SleepTimerMinutes) => void;
+  setAutoplayRecommendationProvider: (provider: AutoplayRecommendationProvider | null) => void;
   syncLikedIds: (ids: string[]) => void;
   addToQueue: (track: Track) => void;
   playNext: (track: Track) => void;
@@ -68,11 +76,19 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const [volume, setVolumeState] = useState(() => readStored("volume", 0.72));
   const [likedIds, setLikedIds] = useState<string[]>(() => readStored("liked", []));
   const [recentlyPlayed, setRecentlyPlayed] = useState<string[]>(() => readStored("recent", []));
+  const [recentTrackHistory, setRecentTrackHistory] = useState<Track[]>(() => {
+    const stored = readStored<unknown>("recent-track-data", []);
+    return Array.isArray(stored)
+      ? stored.filter((track): track is Track => Boolean(track && typeof track === "object" && typeof (track as Track).id === "string" && typeof (track as Track).title === "string"))
+      : [];
+  });
   const [shuffle, setShuffle] = useState(() => readStored("shuffle", false));
   const [repeat, setRepeat] = useState<RepeatMode>(() => {
     const stored = readStored<RepeatMode>("repeat", "all");
     return stored === "off" || stored === "one" || stored === "all" ? stored : "all";
   });
+  const [sleepTimerMinutes, setSleepTimerMinutes] = useState<SleepTimerMinutes>(0);
+  const [sleepTimerRemainingSeconds, setSleepTimerRemainingSeconds] = useState(0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const playContextRef = useRef<Track[]>([]);
@@ -88,6 +104,13 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const currentTrackRef = useRef(currentTrack);
   const lastReportedTimeRef = useRef(0);
   const playRequestRef = useRef(0);
+  const sleepTimerDeadlineRef = useRef<number | null>(null);
+  const sleepTimerIntervalRef = useRef<number | null>(null);
+  const recentTrackHistoryRef = useRef(recentTrackHistory);
+  const autoplayProviderRef = useRef<AutoplayRecommendationProvider | null>(null);
+  const autoplayAfterQueueRef = useRef(false);
+  const autoplayRequestRef = useRef(false);
+  const autoplayGenerationRef = useRef(0);
   authRef.current = isAuthenticated;
   requireAuthRef.current = onRequireAuth;
   playbackEventRef.current = onPlaybackEvent;
@@ -96,6 +119,7 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   repeatRef.current = repeat;
   isPlayingRef.current = isPlaying;
   queueRef.current = queue;
+  recentTrackHistoryRef.current = recentTrackHistory;
 
   useEffect(() => {
     setLikedIds(isAuthenticated ? [] : readStored("liked", []));
@@ -128,6 +152,10 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   useEffect(() => {
     writeStored("repeat", repeat);
   }, [repeat]);
+
+  useEffect(() => () => {
+    if (sleepTimerIntervalRef.current !== null) window.clearInterval(sleepTimerIntervalRef.current);
+  }, []);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -300,6 +328,16 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       writeStored("recent", next);
       return next;
     });
+    setRecentTrackHistory((existing) => {
+      const { audioUrl: _audioUrl, ...trackForHistory } = track;
+      const next = [trackForHistory, ...existing.filter((item) => item.id !== track.id)].slice(0, 30);
+      try {
+        writeStored("recent-track-data", next);
+      } catch {
+        // Recommendations still work from the current session if local storage is full.
+      }
+      return next;
+    });
   }, [library]);
 
   const togglePlay = useCallback(() => {
@@ -333,23 +371,84 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     if (queuedTracks.length) {
       const queueIndex = shuffle ? Math.floor(Math.random() * queuedTracks.length) : 0;
       const nextTrack = queuedTracks[queueIndex];
-      setQueue((items) => items.filter((track) => track.id !== nextTrack.id));
+      const remaining = queuedTracks.filter((track) => track.id !== nextTrack.id);
+      setQueue(remaining);
+      if (!remaining.length) autoplayAfterQueueRef.current = true;
       void playTrack(nextTrack);
       return;
     }
 
     const context = playContextRef.current;
     const currentIndex = context.findIndex((track) => track.id === activeTrack.id);
-    if (currentIndex < 0 || context.length < 2) return;
-    const nextIndex = shuffle
-      ? Math.floor(Math.random() * context.filter((track) => track.id !== activeTrack.id).length)
-      : currentIndex + 1;
-    const available = shuffle
-      ? context.filter((track) => track.id !== activeTrack.id)
-      : context;
-    if (!shuffle && nextIndex >= context.length && repeatRef.current !== "all") return;
-    const nextTrack = available[shuffle ? nextIndex : nextIndex % context.length];
-    if (nextTrack) void playTrack(nextTrack, context);
+    const shouldRecommend = autoplayAfterQueueRef.current
+      || currentIndex < 0
+      || context.length < 2
+      || (!shuffle && currentIndex === context.length - 1 && repeatRef.current !== "all");
+    if (!shouldRecommend && currentIndex >= 0 && context.length >= 2) {
+      const nextIndex = shuffle
+        ? Math.floor(Math.random() * context.filter((track) => track.id !== activeTrack.id).length)
+        : currentIndex + 1;
+      const available = shuffle
+        ? context.filter((track) => track.id !== activeTrack.id)
+        : context;
+      const nextTrack = available[shuffle ? nextIndex : nextIndex % context.length];
+      if (nextTrack) void playTrack(nextTrack, context);
+      return;
+    }
+
+    const recommend = autoplayProviderRef.current;
+    if (!recommend) {
+      setIsLoading(false);
+      setIsPlaying(false);
+      return;
+    }
+    if (autoplayRequestRef.current) {
+      autoplayGenerationRef.current += 1;
+      autoplayRequestRef.current = false;
+      playRequestRef.current += 1;
+      setIsLoading(false);
+      setIsPlaying(false);
+      return;
+    }
+    autoplayAfterQueueRef.current = false;
+    autoplayRequestRef.current = true;
+    const autoplayGeneration = ++autoplayGenerationRef.current;
+    const requestId = playRequestRef.current;
+    const excluded = [...new Set([
+      activeTrack.id,
+      ...recentTrackHistoryRef.current.map((track) => track.id),
+      ...queueRef.current.map((track) => track.id),
+    ])];
+    setIsLoading(true);
+    void recommend(activeTrack, excluded)
+      .then((recommendations) => {
+        if (requestId !== playRequestRef.current || currentTrackRef.current?.id !== activeTrack.id) return;
+        if (queueRef.current.length) {
+          setIsLoading(false);
+          nextRef.current();
+          return;
+        }
+        const nextTrack = recommendations.find((track) => !excluded.includes(track.id));
+        if (!nextTrack) {
+          setIsLoading(false);
+          setIsPlaying(false);
+          setPlaybackError("No related songs are available right now. Add a track or try again later.");
+          return;
+        }
+        playContextRef.current = recommendations;
+        void playTrack(nextTrack, recommendations);
+      })
+      .catch((error) => {
+        if (requestId !== playRequestRef.current || currentTrackRef.current?.id !== activeTrack.id) return;
+        setIsLoading(false);
+        setIsPlaying(false);
+        setPlaybackError(error instanceof Error ? error.message : "Related songs could not be loaded.");
+      })
+      .finally(() => {
+        if (autoplayGeneration === autoplayGenerationRef.current) {
+          autoplayRequestRef.current = false;
+        }
+      });
   }, [playTrack, shuffle]);
   nextRef.current = next;
 
@@ -378,6 +477,36 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const toggleShuffle = () => setShuffle((value) => !value);
   const cycleRepeat = () => setRepeat((value) => (value === "off" ? "all" : value === "all" ? "one" : "off"));
   const setRepeatMode = (mode: RepeatMode) => setRepeat(mode);
+  const setSleepTimer = useCallback((minutes: SleepTimerMinutes) => {
+    if (sleepTimerIntervalRef.current !== null) {
+      window.clearInterval(sleepTimerIntervalRef.current);
+      sleepTimerIntervalRef.current = null;
+    }
+    sleepTimerDeadlineRef.current = null;
+    setSleepTimerMinutes(minutes);
+    if (minutes === 0) {
+      setSleepTimerRemainingSeconds(0);
+      return;
+    }
+
+    const deadline = Date.now() + minutes * 60_000;
+    sleepTimerDeadlineRef.current = deadline;
+    setSleepTimerRemainingSeconds(minutes * 60);
+    sleepTimerIntervalRef.current = window.setInterval(() => {
+      const remaining = Math.max(0, Math.ceil(((sleepTimerDeadlineRef.current ?? Date.now()) - Date.now()) / 1000));
+      setSleepTimerRemainingSeconds(remaining);
+      if (remaining === 0) {
+        if (sleepTimerIntervalRef.current !== null) window.clearInterval(sleepTimerIntervalRef.current);
+        sleepTimerIntervalRef.current = null;
+        sleepTimerDeadlineRef.current = null;
+        setSleepTimerMinutes(0);
+        audioRef.current?.pause();
+      }
+    }, 1000);
+  }, []);
+  const setAutoplayRecommendationProvider = useCallback((provider: AutoplayRecommendationProvider | null) => {
+    autoplayProviderRef.current = provider;
+  }, []);
   const addToQueue = useCallback((track: Track) => {
     setQueue((items) => items.some((item) => item.id === track.id) ? items : [...items, track]);
   }, []);
@@ -387,11 +516,16 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       togglePlay();
       return;
     }
+    autoplayAfterQueueRef.current = false;
     void playTrack(track, context?.length ? context : [track]);
   }, [playTrack, togglePlay]);
   const playQueueTrack = useCallback((track: Track) => {
     const index = queueRef.current.findIndex((item) => item.id === track.id);
-    setQueue((items) => index >= 0 ? items.slice(index + 1) : items.filter((item) => item.id !== track.id));
+    const remaining = index >= 0
+      ? queueRef.current.slice(index + 1)
+      : queueRef.current.filter((item) => item.id !== track.id);
+    setQueue(remaining);
+    autoplayAfterQueueRef.current = remaining.length === 0;
     void playTrack(track);
   }, [playTrack]);
   const playNext = useCallback((track: Track) => {
@@ -401,11 +535,23 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     ]);
   }, []);
   const removeFromQueue = (id: string) => setQueue((items) => items.filter((track) => track.id !== id));
-  const clearQueue = () => setQueue([]);
+  const clearQueue = () => {
+    if (queueRef.current.length) autoplayAfterQueueRef.current = true;
+    setQueue([]);
+  };
   const removeRecentlyPlayed = useCallback((id: string) => {
     setRecentlyPlayed((items) => {
       const next = items.filter((trackId) => trackId !== id);
       writeStored("recent", next);
+      return next;
+    });
+    setRecentTrackHistory((items) => {
+      const next = items.filter((track) => track.id !== id);
+      try {
+        writeStored("recent-track-data", next);
+      } catch {
+        // Keep the current session responsive if local storage is unavailable.
+      }
       return next;
     });
   }, []);
@@ -418,6 +564,18 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     });
   };
   const syncLikedIds = useCallback((ids: string[]) => setLikedIds([...new Set(ids)]), []);
+
+  useMediaSession({
+    track: currentTrack,
+    isPlaying,
+    currentTime,
+    duration,
+    play: () => { if (!isPlaying) togglePlay(); },
+    pause: () => { if (isPlaying) togglePlay(); },
+    next,
+    previous,
+    seek,
+  });
 
   const removeLocalTrack = useCallback(async (trackId: string) => {
     await removeStoredLocalTrack(trackId);
@@ -433,16 +591,16 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const value = useMemo(
     () => ({
       currentTrack, isPlaying, isLoading, currentTime, duration, volume, queue, library,
-      likedIds, recentlyPlayed, shuffle, repeat, playbackError,
+      likedIds, recentlyPlayed, recentTrackHistory, shuffle, repeat, playbackError, sleepTimerMinutes, sleepTimerRemainingSeconds,
       playTrack, requestTrack, playQueueTrack, togglePlay, next,
-      previous, seek, setVolume, toggleShuffle, cycleRepeat, setRepeatMode, addToQueue, playNext, removeFromQueue,
+      previous, seek, setVolume, toggleShuffle, cycleRepeat, setRepeatMode, setSleepTimer, setAutoplayRecommendationProvider, addToQueue, playNext, removeFromQueue,
       clearQueue, removeRecentlyPlayed, toggleLike, syncLikedIds, removeLocalTrack,
     }),
     [
       currentTrack, isPlaying, isLoading, currentTime, duration, volume, queue, library,
-      likedIds, recentlyPlayed, shuffle, repeat, playbackError, playTrack, requestTrack,
+      likedIds, recentlyPlayed, recentTrackHistory, shuffle, repeat, playbackError, sleepTimerMinutes, sleepTimerRemainingSeconds, playTrack, requestTrack,
       playQueueTrack, togglePlay, next, previous, seek, setVolume, toggleShuffle,
-      cycleRepeat, setRepeatMode, addToQueue, playNext, removeFromQueue,
+      cycleRepeat, setRepeatMode, setSleepTimer, setAutoplayRecommendationProvider, addToQueue, playNext, removeFromQueue,
       clearQueue, removeRecentlyPlayed, toggleLike, syncLikedIds, removeLocalTrack,
     ],
   );
