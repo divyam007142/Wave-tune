@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Bell, BellOff, Check, Music2, Waves, X } from "lucide-react";
+import { Bell, BellOff, Check, LogIn, X } from "lucide-react";
 import {
   notificationPreferenceKey,
-  registerNotificationServiceWorker,
-  showWaveNotification,
+  disableWavePushNotifications,
+  enableWavePushNotifications,
 } from "../services/notifications";
 
 function savedEnabled() {
@@ -18,16 +18,40 @@ function savedEnabled() {
   }
 }
 
-export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
+function supportsPushNotifications() {
+  return typeof window !== "undefined"
+    && window.isSecureContext
+    && "Notification" in window
+    && "PushManager" in window
+    && "serviceWorker" in navigator;
+}
+
+export function NotificationCenter({ isSignedIn, onEnabled, onLogin }: { isSignedIn: boolean; onEnabled?: (message?: string) => void; onLogin: () => void }) {
   const reduceMotion = useReducedMotion();
   const [open, setOpen] = useState(false);
-  const [enabled, setEnabled] = useState(savedEnabled);
+  const [enabled, setEnabled] = useState(false);
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">(
-    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported",
+    supportsPushNotifications() ? Notification.permission : "unsupported",
   );
   const [message, setMessage] = useState("");
   const [requesting, setRequesting] = useState(false);
   const actionRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!isSignedIn || permission !== "granted" || !savedEnabled()) {
+      setEnabled(false);
+      return;
+    }
+    let active = true;
+    void enableWavePushNotifications()
+      .then(() => { if (active) setEnabled(true); })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setEnabled(false);
+        setMessage(error instanceof Error ? error.message : "Background alerts could not be connected.");
+      });
+    return () => { active = false; };
+  }, [isSignedIn, permission]);
 
   useEffect(() => {
     if (!open) return;
@@ -50,10 +74,16 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
   const enable = async () => {
     setRequesting(true);
     setMessage("");
-    if (!("Notification" in window)) {
+    if (!supportsPushNotifications()) {
       setPermission("unsupported");
-      setMessage("This browser does not support desktop notifications.");
+      setMessage("This browser cannot receive background alerts. You can still see updates in the Notifications tab.");
       setRequesting(false);
+      return;
+    }
+    if (!isSignedIn) {
+      setRequesting(false);
+      setOpen(false);
+      onLogin();
       return;
     }
     try {
@@ -61,23 +91,16 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
       if (result === "default") result = await Notification.requestPermission();
       setPermission(result);
       if (result === "granted") {
-        setEnabled(true);
-        setMessage("Wave Streak notes are on. Your device’s media panel can show the song and playback controls where supported.");
+        await enableWavePushNotifications();
         try {
           localStorage.setItem(notificationPreferenceKey, "on");
         } catch {
-          setMessage("Notifications are enabled for this visit.");
+          // The live subscription still works if browser storage is unavailable.
         }
-        await registerNotificationServiceWorker();
-        try {
-          await showWaveNotification(
-            "Wave Tune is ready",
-            "Your next listening streak update will appear here.",
-            "wave-tune-notification-test",
-          );
-        } catch {
-          // Permission remains enabled even if this browser blocks the sample alert.
-        }
+        setEnabled(true);
+        setMessage("Background alerts are ready. Listening updates will also appear in your inbox.");
+        setOpen(false);
+        onEnabled?.();
       } else if (result === "denied") {
         setEnabled(false);
         setMessage("Notifications are blocked in your browser. Change this site’s permission in browser settings to enable them.");
@@ -85,21 +108,31 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
         setEnabled(false);
         setMessage("Choose Allow in your browser’s permission prompt to turn notifications on.");
       }
-    } catch {
-      setMessage("The browser could not open its notification permission prompt. Try again from this page.");
+    } catch (error) {
+      const errorMessage = error instanceof Error
+        ? error.message
+        : "The browser could not connect this device for background alerts.";
+      setMessage(errorMessage);
+      if (Notification.permission === "granted") {
+        setOpen(false);
+        onEnabled?.(errorMessage);
+      }
     } finally {
       setRequesting(false);
     }
   };
 
-  const disable = () => {
+  const disable = async () => {
+    setRequesting(true);
     setEnabled(false);
     try {
-      localStorage.removeItem(notificationPreferenceKey);
-    } catch {
-      // The in-memory switch still takes effect when browser storage is unavailable.
+      await disableWavePushNotifications();
+      setMessage("Background alerts are off for this device.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "This device was disconnected from background alerts.");
+    } finally {
+      setRequesting(false);
     }
-    setMessage("Wave Tune notifications are off.");
   };
 
   return <>
@@ -141,24 +174,22 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
             <span className="notification-dialog-icon">{enabled ? <Bell size={20} /> : <BellOff size={20} />}</span>
             <button type="button" className="notification-close" onClick={() => setOpen(false)} aria-label="Close notifications"><X size={17} /></button>
           </div>
-          <span className="eyebrow">LISTENER NOTES / {enabled ? "ON" : "OFF"}</span>
-          <h2 id="notification-title">{enabled ? "Your Wave Streak is ready." : "Keep your listening ritual going."}</h2>
-          <p>Allow a daily note after listening is recorded. Your device’s media panel can show the track, artist, artwork, progress, and playback controls automatically.</p>
-          <div className="notification-feature-list">
-            <div className="notification-feature"><Waves size={16} /><span><strong>WAVE STREAK</strong><small>A small note when today’s listening is in.</small></span></div>
-            <div className="notification-feature"><Music2 size={16} /><span><strong>NOW PLAYING</strong><small>Album art, song details, and media controls where your browser supports them.</small></span></div>
-          </div>
+          <span className="eyebrow">WAVE TUNE · NOTIFICATIONS</span>
+          <h2 id="notification-title">{enabled ? "Listening updates are on." : "Keep up with your listening."}</h2>
+          <p>Get Wave Tune alerts for new tracks and listening streaks, even when this app is closed. Your activity also appears in the Notifications tab.</p>
           <div className={`notification-permission-state state-${permission}`} aria-live="polite">
             <span className="permission-led" />
-            <span><strong>{enabled ? "Permission granted" : permission === "denied" ? "Permission blocked" : permission === "unsupported" ? "Not available here" : "Browser permission"}</strong><small>{enabled ? "Wave Streak notes are active." : permission === "denied" ? "Change this site’s permission in browser settings." : permission === "unsupported" ? "This browser does not support notifications." : "Your browser will ask before enabling notes."}</small></span>
+            <span><strong>{!isSignedIn ? "Sign in to connect this device" : enabled ? "Background alerts are ready" : permission === "denied" ? "Notifications are blocked" : permission === "unsupported" ? "Not available in this browser" : "Notifications are off"}</strong><small>{!isSignedIn ? "In-app updates stay here; sign in to receive alerts while Wave Tune is closed." : enabled ? "This device is linked to your account for new-track and streak alerts." : permission === "denied" ? "Allow notifications for this site in browser settings." : permission === "unsupported" ? "This browser cannot receive push notifications." : "Your browser will ask before enabling notifications."}</small></span>
           </div>
           {message && <div className={`notification-message ${permission === "denied" || permission === "unsupported" ? "is-warning" : ""}`} role="status">{message}</div>}
           {enabled
-            ? <button ref={actionRef} type="button" className="notification-action secondary-button" onClick={disable}><BellOff size={15} /> Turn off notifications</button>
-            : <button ref={actionRef} type="button" className="notification-action primary-button" disabled={requesting || permission === "unsupported" || permission === "denied"} onClick={() => void enable()}>
-              <Check size={15} /> {requesting ? "Waiting for permission…" : permission === "denied" ? "Blocked in browser settings" : "Allow notifications"}
+            ? <button ref={actionRef} type="button" className="notification-action secondary-button" disabled={requesting} onClick={() => void disable()}><BellOff size={15} /> {requesting ? "Turning off…" : "Turn off notifications"}</button>
+            : !isSignedIn
+              ? <button ref={actionRef} type="button" className="notification-action primary-button" onClick={onLogin}><LogIn size={15} /> Sign in to enable alerts</button>
+              : <button ref={actionRef} type="button" className="notification-action primary-button" disabled={requesting || permission === "unsupported" || permission === "denied"} onClick={() => void enable()}>
+              <Check size={15} /> {requesting ? "Connecting this device…" : permission === "denied" ? "Blocked in browser settings" : "Allow background alerts"}
             </button>}
-          <small className="notification-footnote">{isSignedIn ? "Your Wave Streak is recorded on this browser. Your profile and saved music are tied to your account." : "Your Wave Streak is recorded on this browser. Sign in to keep playlists and likes with your account."} Notes work while Wave Tune is open or playing in a background tab. Notifications after the browser fully closes need push setup. Media controls vary by browser and device.</small>
+          <small className="notification-footnote">{isSignedIn ? "Alerts are delivered by Wave Tune through your browser’s push service. You can disconnect this device at any time." : "Activity updates are saved on this device. Sign in to sync music and receive alerts when the app is closed."}</small>
           </motion.section>
         </motion.div>}
       </AnimatePresence>,
