@@ -53,24 +53,24 @@ export function TimeCapsule({ isSignedIn, onLogin }: { isSignedIn: boolean; onLo
   return <div className="page capsule-page">
     <header className="capsule-heading">
       <div>
-        <span className="eyebrow">A LISTENING JOURNAL · {stats?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "LOCAL TIME"}</span>
-        <h1>Time capsule</h1>
+        <span className="eyebrow">SOUND CAPSULE · {stats?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "LOCAL TIME"}</span>
+        <h1>Sound Capsule</h1>
         <p>A small record of where your listening days have gone.</p>
       </div>
-      <div className="capsule-stamp" aria-hidden="true"><span>WT</span><i /><i /><i /></div>
+      <div className="capsule-stamp" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M8 26v-4m6 10V16m6 17V14m6 23V11m6 24V15m6 18V18m6 10v-5" /></svg></div>
     </header>
 
     {!isSignedIn ? <section className="capsule-gate">
       <div className="capsule-gate-mark"><LockKeyhole size={20} /></div>
       <span className="eyebrow">PRIVATE BY DESIGN</span>
       <h2>Your listening, kept close.</h2>
-      <p>Sign in to open a real listening record. Time Capsule uses account activity only; nothing is filled in with sample listening.</p>
+      <p>Sign in to open your listening record. Sound Capsule uses account activity only; it never adds sample listening.</p>
       <button className="primary-button" type="button" onClick={onLogin}><Headphones size={15} /> Sign in to view your capsule <ArrowUpRight size={14} /></button>
       <small>Per-day and per-song play tracking starts now. Your legacy lifetime listening time remains available in Settings.</small>
     </section> : <>
       <div className="capsule-period-row">
         <div className="capsule-period-copy"><span className="eyebrow">THE RECORD</span><strong>{days} days, ending today</strong></div>
-        <div className="capsule-period-switch" role="group" aria-label="Time Capsule period">
+        <div className="capsule-period-switch" role="group" aria-label="Sound Capsule period">
           <button type="button" className={days === 7 ? "is-active" : ""} aria-pressed={days === 7} onClick={() => setDays(7)}>7 days</button>
           <button type="button" className={days === 30 ? "is-active" : ""} aria-pressed={days === 30} onClick={() => setDays(30)}>30 days</button>
         </div>
