@@ -26,6 +26,7 @@ type SearchEntry = {
 
 type SearchPayload = { entries?: SearchEntry[] };
 type CacheEntry<T> = { value: T; expiresAt: number };
+export type RecommendationSeed = { title: string; artist: string; id?: string };
 
 const SEARCH_TTL_MS = 5 * 60_000;
 const STREAM_TTL_MS = 4 * 60_000;
@@ -138,16 +139,123 @@ export function selectTrendingSongs(results: YouTubeResult[]): YouTubeResult[] {
     ) return false;
     seen.add(result.videoId);
     return true;
-  }).slice(0, 10);
+  }).slice(0, 20);
+}
+
+export function buildCatalogSearchQueries(query: string): string[] {
+  const normalized = query.trim().replace(/\s+/g, " ").slice(0, 160);
+  if (!normalized) return [];
+  const hasQuotedPhrase = /["“”]/.test(normalized);
+  const lyricLike = hasQuotedPhrase
+    || /\b(?:lyrics?|chorus|verse)\b/i.test(normalized)
+    || (normalized.split(" ").length >= 7 && /\b(?:i|you|me|my|your|we|the|when|where|and|are|was|with)\b/i.test(normalized));
+  const variants = lyricLike
+    ? [`${normalized} lyrics`, `${normalized} song name`]
+    : [`${normalized} song`, `${normalized} official music video`];
+  return [...new Set([normalized, ...variants.map((value) => value.slice(0, 160))])];
+}
+
+export async function searchCatalogYouTube(query: string): Promise<YouTubeResult[]> {
+  const queries = buildCatalogSearchQueries(query);
+  if (!queries.length) return [];
+  const settled = await Promise.allSettled(queries.map(searchYouTube));
+  const results = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  if (!results.length) {
+    const failure = settled.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }
+  const seen = new Set<string>();
+  return results.filter((result) => {
+    if (!validVideoId(result.videoId) || !result.title.trim() || seen.has(result.videoId)) return false;
+    seen.add(result.videoId);
+    return true;
+  }).slice(0, 30);
+}
+
+export function buildRecommendationQueries({
+  currentTrack,
+  likedTracks,
+  recentTracks,
+}: {
+  currentTrack?: RecommendationSeed | null;
+  likedTracks?: RecommendationSeed[];
+  recentTracks?: RecommendationSeed[];
+}) {
+  const artists = new Map<string, { name: string; score: number }>();
+  const addArtist = (seed: RecommendationSeed, score: number) => {
+    const name = seed.artist.trim().slice(0, 100);
+    if (!name || name.toLowerCase() === "unknown artist") return;
+    const key = name.toLocaleLowerCase();
+    const previous = artists.get(key);
+    artists.set(key, { name, score: (previous?.score ?? 0) + score });
+  };
+  for (const track of likedTracks ?? []) addArtist(track, 3);
+  for (const track of recentTracks ?? []) addArtist(track, 1);
+  if (currentTrack) addArtist(currentTrack, 4);
+
+  const queries: string[] = [];
+  if (currentTrack?.title && currentTrack.artist) {
+    queries.push(`${currentTrack.title} ${currentTrack.artist} similar songs`);
+  }
+  const topArtists = [...artists.values()]
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 2);
+  for (const artist of topArtists) {
+    queries.push(`${artist.name} popular songs official music`);
+  }
+  if (!queries.length && (recentTracks?.length || likedTracks?.length)) {
+    const seed = [...(likedTracks ?? []), ...(recentTracks ?? [])][0];
+    if (seed) queries.push(`${seed.title} ${seed.artist} similar songs`);
+  }
+  return [...new Set(queries.map((query) => query.trim().slice(0, 160)))].slice(0, 3);
+}
+
+export async function getRecommendedYouTube({
+  currentTrack,
+  likedTracks = [],
+  recentTracks = [],
+  excludeIds = [],
+}: {
+  currentTrack?: RecommendationSeed | null;
+  likedTracks?: RecommendationSeed[];
+  recentTracks?: RecommendationSeed[];
+  excludeIds?: string[];
+}): Promise<YouTubeResult[]> {
+  const queries = buildRecommendationQueries({ currentTrack, likedTracks, recentTracks });
+  if (!queries.length) return getTrendingYouTube();
+
+  const settled = await Promise.allSettled(queries.map(searchYouTube));
+  const results = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  const excluded = new Set(excludeIds);
+  let recommendations = selectTrendingSongs(results).filter((track) => !excluded.has(track.videoId));
+  if (recommendations.length < 8) {
+    try {
+      const trending = await getTrendingYouTube();
+      recommendations = selectTrendingSongs([...recommendations, ...trending])
+        .filter((track) => !excluded.has(track.videoId));
+    } catch {
+      // A useful personalized result is still returned when the fallback catalog is unavailable.
+    }
+  }
+  if (!recommendations.length && settled.every((result) => result.status === "rejected")) {
+    throw settled.find((result) => result.status === "rejected")?.reason;
+  }
+  return recommendations.slice(0, 20);
 }
 
 export async function getTrendingYouTube(): Promise<YouTubeResult[]> {
   const year = new Date().getUTCFullYear();
-  const [trendingResults, newSongResults] = await Promise.all([
+  const settled = await Promise.allSettled([
     searchYouTube("trending songs official music video"),
     searchYouTube(`new songs official music video ${year}`),
+    searchYouTube("trending Indian songs official music video"),
   ]);
-  return selectTrendingSongs([...trendingResults, ...newSongResults]);
+  const results = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  if (!results.length) {
+    const failure = settled.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  }
+  return selectTrendingSongs(results);
 }
 
 async function resolveStreamUncached(videoId: string): Promise<string> {
