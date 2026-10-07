@@ -1,0 +1,27 @@
+{
+  "id": "/",
+  "name": "Wave Tune — Your daily soundtrack",
+  "short_name": "Wave Tune",
+  "description": "Find your next favorite song, build a listening streak, and take your music anywhere.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#eeeadd",
+  "theme_color": "#eeeadd",
+  "categories": ["music", "entertainment"],
+  "icons": [
+    {
+      "src": "/wave-tune-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/wave-tune-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
