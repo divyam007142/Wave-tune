@@ -555,6 +555,36 @@ router.post(
 );
 
 router.delete(
+  "/playlists/:playlistId/tracks/:trackId",
+  requireAuth,
+  asyncRoute(async (request, response) => {
+    const user = sessionUserFrom(response);
+    const users = await collection();
+    const document = await ensureUser(user);
+    const playlist = (document.playlists ?? []).find(
+      (item) => item.id === request.params.playlistId,
+    );
+    if (!playlist) {
+      response.status(404).json({ error: "That playlist no longer exists." });
+      return;
+    }
+    const trackId = String(request.params.trackId ?? "");
+    const tracks = (playlist.tracks ?? []).filter((item) => item.id !== trackId);
+    const updated: Playlist = {
+      ...playlist,
+      tracks,
+      trackIds: tracks.map((item) => item.id),
+      artwork: tracks[0]?.artwork ?? "",
+    };
+    await users.updateOne(
+      { accountId: user.id, "playlists.id": playlist.id },
+      { $set: { "playlists.$": updated, updatedAt: new Date() } },
+    );
+    response.json({ playlist: updated });
+  }),
+);
+
+router.delete(
   "/playlists/:playlistId",
   requireAuth,
   asyncRoute(async (request, response) => {
