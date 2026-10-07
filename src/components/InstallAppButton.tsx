@@ -98,7 +98,13 @@ export function InstallAppButton() {
   if (installed) return null;
 
   return <>
-    <button type="button" className="install-app-button" onClick={openGuide} aria-label="Install Wave Tune" title="Install Wave Tune">
+    <button
+      type="button"
+      className="install-app-button"
+      onClick={() => installPrompt ? void install() : openGuide()}
+      aria-label={installPrompt ? "Install Wave Tune" : "Show install options for Wave Tune"}
+      title={installPrompt ? "Install Wave Tune" : "Show install options"}
+    >
       <Download size={15} />
       <span>Install app</span>
     </button>
@@ -130,7 +136,7 @@ export function InstallAppButton() {
             <div className="install-guide-brand">
               <span className="install-guide-app-icon"><img src="/wave-tune-icon-192.png" alt="" /></span>
               <span><strong>Wave Tune</strong><small>Music that moves with you</small></span>
-              <span className="install-guide-live"><i /> READY TO INSTALL</span>
+              <span className="install-guide-live"><i /> {installPrompt ? "INSTALL AVAILABLE" : "INSTALL GUIDE"}</span>
             </div>
             <div className="install-guide-wave" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /><i /></div>
             <h2 id="install-guide-title">Your music,<br /><em>one tap away.</em></h2>
