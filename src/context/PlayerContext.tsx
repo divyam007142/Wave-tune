@@ -11,12 +11,18 @@ import {
 import { loadLocalTracks, readStored, removeLocalTrack as removeStoredLocalTrack, writeStored } from "../services/storage";
 import { youtubePlaybackProvider } from "../services/youtube";
 import { useMediaSession } from "../hooks/useMediaSession";
+import {
+  canGuestPlayTrack,
+  currentGuestListeningDay,
+  GUEST_DAILY_SONG_LIMIT,
+  recordGuestTrack,
+  type GuestListeningDay,
+} from "../services/guestListening";
 import type { Track } from "../types/music";
 
 type PlayerProviderProps = {
   children: ReactNode;
   isAuthenticated?: boolean;
-  onRequireAuth?: () => void;
   onPlaybackEvent?: (track: Track, seconds: number) => void;
   onLikeEvent?: (track: Track) => void;
 };
@@ -65,7 +71,7 @@ type PlayerContextValue = {
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
 
-export function PlayerProvider({ children, isAuthenticated = false, onRequireAuth, onPlaybackEvent, onLikeEvent }: PlayerProviderProps) {
+export function PlayerProvider({ children, isAuthenticated = false, onPlaybackEvent, onLikeEvent }: PlayerProviderProps) {
   const [library, setLibrary] = useState<Track[]>([]);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [queue, setQueue] = useState<Track[]>([]);
@@ -82,6 +88,9 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       ? stored.filter((track): track is Track => Boolean(track && typeof track === "object" && typeof (track as Track).id === "string" && typeof (track as Track).title === "string"))
       : [];
   });
+  const guestPlayRecordRef = useRef<GuestListeningDay>(
+    currentGuestListeningDay(readStored<unknown>("guest-daily-songs", null)),
+  );
   const [shuffle, setShuffle] = useState(() => readStored("shuffle", false));
   const [repeat, setRepeat] = useState<RepeatMode>(() => {
     const stored = readStored<RepeatMode>("repeat", "all");
@@ -98,7 +107,6 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const queueRef = useRef(queue);
   const flushPlaybackRef = useRef<() => void>(() => undefined);
   const authRef = useRef(isAuthenticated);
-  const requireAuthRef = useRef(onRequireAuth);
   const playbackEventRef = useRef(onPlaybackEvent);
   const likeEventRef = useRef(onLikeEvent);
   const currentTrackRef = useRef(currentTrack);
@@ -112,7 +120,6 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
   const autoplayRequestRef = useRef(false);
   const autoplayGenerationRef = useRef(0);
   authRef.current = isAuthenticated;
-  requireAuthRef.current = onRequireAuth;
   playbackEventRef.current = onPlaybackEvent;
   likeEventRef.current = onLikeEvent;
   currentTrackRef.current = currentTrack;
@@ -224,6 +231,24 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     const onPlaying = () => {
       setIsLoading(false);
       setIsPlaying(true);
+      const track = currentTrackRef.current;
+      if (track && !authRef.current) {
+        const nextGuestRecord = recordGuestTrack(
+          currentGuestListeningDay(guestPlayRecordRef.current),
+          track.id,
+        );
+        if (nextGuestRecord !== guestPlayRecordRef.current) {
+          guestPlayRecordRef.current = nextGuestRecord;
+          try {
+            writeStored("guest-daily-songs", nextGuestRecord);
+          } catch {
+            // The five-song cap still applies for this visit if browser storage is unavailable.
+          }
+        }
+      }
+      if (track) {
+        window.dispatchEvent(new CustomEvent<Track>("wave-tune:track-started", { detail: track }));
+      }
     };
     const onPause = () => {
       reportElapsed(true);
@@ -266,15 +291,22 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const playTrack = useCallback(async (track: Track, context?: Track[]) => {
-    if (!authRef.current) {
-      const played = readStored<string[]>("wave-tune:guest-played", []);
-      if (!played.includes(track.id) && played.length >= 5) {
-        setPlaybackError("Your five free songs are used. Sign in with Google to keep listening.");
-        requireAuthRef.current?.();
-        return;
-      }
+  const allowGuestTrack = useCallback((trackId?: string) => {
+    if (authRef.current) return true;
+    const guestRecord = currentGuestListeningDay(guestPlayRecordRef.current);
+    guestPlayRecordRef.current = guestRecord;
+    if (trackId ? canGuestPlayTrack(guestRecord, trackId) : guestRecord.trackIds.length < GUEST_DAILY_SONG_LIMIT) return true;
+    setPlaybackError(null);
+    if (audioRef.current?.ended) {
+      setIsLoading(false);
+      setIsPlaying(false);
     }
+    window.dispatchEvent(new Event("wave-tune:guest-limit"));
+    return false;
+  }, []);
+
+  const playTrack = useCallback(async (track: Track, context?: Track[]) => {
+    if (!allowGuestTrack(track.id)) return;
     const requestId = ++playRequestRef.current;
     setIsPlaying(false);
     setIsLoading(true);
@@ -315,10 +347,6 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       return;
     }
 
-    if (!authRef.current) {
-      const played = readStored<string[]>("wave-tune:guest-played", []);
-      if (!played.includes(track.id)) writeStored("wave-tune:guest-played", [...played, track.id]);
-    }
     setCurrentTrack(playableTrack);
     setIsPlaying(true);
     setIsLoading(true);
@@ -338,7 +366,7 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       }
       return next;
     });
-  }, [library]);
+  }, [allowGuestTrack, library]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -371,6 +399,13 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     if (queuedTracks.length) {
       const queueIndex = shuffle ? Math.floor(Math.random() * queuedTracks.length) : 0;
       const nextTrack = queuedTracks[queueIndex];
+      if (!allowGuestTrack(nextTrack.id)) {
+        if (audioRef.current?.ended) {
+          setIsLoading(false);
+          setIsPlaying(false);
+        }
+        return;
+      }
       const remaining = queuedTracks.filter((track) => track.id !== nextTrack.id);
       setQueue(remaining);
       if (!remaining.length) autoplayAfterQueueRef.current = true;
@@ -396,6 +431,7 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       return;
     }
 
+    if (!allowGuestTrack()) return;
     const recommend = autoplayProviderRef.current;
     if (!recommend) {
       setIsLoading(false);
@@ -449,7 +485,7 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
           autoplayRequestRef.current = false;
         }
       });
-  }, [playTrack, shuffle]);
+  }, [allowGuestTrack, playTrack, shuffle]);
   nextRef.current = next;
 
   const previous = useCallback(() => {
@@ -516,10 +552,12 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
       togglePlay();
       return;
     }
+    if (!allowGuestTrack(track.id)) return;
     autoplayAfterQueueRef.current = false;
     void playTrack(track, context?.length ? context : [track]);
-  }, [playTrack, togglePlay]);
+  }, [allowGuestTrack, playTrack, togglePlay]);
   const playQueueTrack = useCallback((track: Track) => {
+    if (!allowGuestTrack(track.id)) return;
     const index = queueRef.current.findIndex((item) => item.id === track.id);
     const remaining = index >= 0
       ? queueRef.current.slice(index + 1)
@@ -527,7 +565,7 @@ export function PlayerProvider({ children, isAuthenticated = false, onRequireAut
     setQueue(remaining);
     autoplayAfterQueueRef.current = remaining.length === 0;
     void playTrack(track);
-  }, [playTrack]);
+  }, [allowGuestTrack, playTrack]);
   const playNext = useCallback((track: Track) => {
     setQueue((items) => [
       track,
