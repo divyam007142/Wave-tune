@@ -1,4 +1,4 @@
-const SHELL_CACHE = "wave-tune-shell-v1";
+const SHELL_CACHE = "wave-tune-shell-v3";
 const APP_STATIC_ASSETS = [
   "/manifest.webmanifest",
   "/favicon.svg",
@@ -90,15 +90,50 @@ self.addEventListener("fetch", (event) => {
   })());
 });
 
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data?.json() ?? {};
+  } catch {
+    payload = { title: "Wave Tune", body: "You have a new listening update." };
+  }
+
+  event.waitUntil((async () => {
+    const title = typeof payload.title === "string" ? payload.title : "Wave Tune";
+    const body = typeof payload.body === "string" ? payload.body : "A new listening update is ready.";
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const visibleWindows = windows.filter((client) => client.visibilityState === "visible");
+    if (visibleWindows.length) {
+      for (const client of visibleWindows) {
+        client.postMessage({ type: "wave-tune:push", payload });
+      }
+      return;
+    }
+
+    const artwork = typeof payload.artwork === "string" ? payload.artwork : "/wave-tune-icon-192.png";
+    await self.registration.showNotification(title, {
+      body,
+      icon: artwork,
+      image: artwork,
+      badge: "/wave-tune-icon-192.png",
+      tag: typeof payload.tag === "string" ? payload.tag : "wave-tune-update",
+      renotify: false,
+      data: { url: new URL("/?view=notifications", self.location.origin).href },
+    });
+  })());
+});
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   event.waitUntil((async () => {
+    const target = new URL("/?view=notifications", self.location.origin);
     const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     const appWindow = windows.find((client) => "focus" in client);
     if (appWindow) {
       await appWindow.focus();
+      appWindow.postMessage({ type: "wave-tune:open-notifications" });
       return;
     }
-    await self.clients.openWindow(self.registration.scope);
+    await self.clients.openWindow(target.href);
   })());
 });
