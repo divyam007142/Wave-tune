@@ -130,6 +130,13 @@ export const accountService = {
     });
   },
 
+  removeFromPlaylist(playlistId: string, trackId: string) {
+    return request<{ playlist: Playlist }>(
+      `/api/account/playlists/${encodeURIComponent(playlistId)}/tracks/${encodeURIComponent(trackId)}`,
+      { method: "DELETE" },
+    );
+  },
+
   deletePlaylist(playlistId: string) {
     return request<{ ok: true }>(`/api/account/playlists/${encodeURIComponent(playlistId)}`, {
       method: "DELETE",
