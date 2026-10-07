@@ -5,7 +5,15 @@ import { authRouter } from "./authRoutes";
 import { accountRouter } from "./accountRoutes";
 import { DatabaseUnavailableError, isMongoConfigured } from "./database";
 import type { Track } from "../src/types/music";
-import { getYouTubeStream, searchYouTube, type YouTubeResult } from "./youtube";
+import {
+  getRecommendedYouTube,
+  getTrendingYouTube,
+  getYouTubeStream,
+  searchCatalogYouTube,
+  searchYouTube,
+  type RecommendationSeed,
+  type YouTubeResult,
+} from "./youtube";
 
 const app = express();
 const port = Number(process.env.PORT ?? 5000);
@@ -23,6 +31,19 @@ function catalogTrack(result: YouTubeResult): Track {
     accent: "#557c48",
     source: "catalog",
   };
+}
+
+function recommendationSeeds(value: unknown): RecommendationSeed[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 12).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const seed = candidate as Record<string, unknown>;
+    const title = typeof seed.title === "string" ? seed.title.trim().slice(0, 160) : "";
+    const artist = typeof seed.artist === "string" ? seed.artist.trim().slice(0, 100) : "";
+    const id = typeof seed.id === "string" ? seed.id.trim().slice(0, 200) : undefined;
+    if (!title || !artist || seed.source === "local") return [];
+    return [{ title, artist, ...(id ? { id } : {}) }];
+  });
 }
 const allowedOrigins = (process.env.FRONTEND_ORIGIN ?? "")
   .split(",")
@@ -102,7 +123,8 @@ app.get("/api/health", (_request, response) => {
 
 app.get("/api/catalog/trending", async (_request, response) => {
   try {
-    const results = await searchYouTube("trending songs official audio");
+    response.setHeader("Cache-Control", "public, max-age=120, stale-while-revalidate=300");
+    const results = await getTrendingYouTube();
     response.json({ tracks: results.map(catalogTrack) });
   } catch (error) {
     console.error(
@@ -126,7 +148,7 @@ app.get("/api/catalog/search", async (request, response) => {
     return;
   }
   try {
-    const tracks = (await searchYouTube(query)).map(catalogTrack);
+    const tracks = (await searchCatalogYouTube(query)).map(catalogTrack);
     response.json({ tracks, albums: [], artists: [], playlists: [] });
   } catch (error) {
     console.error(
@@ -136,6 +158,34 @@ app.get("/api/catalog/search", async (request, response) => {
     response
       .status(502)
       .json({ error: "YouTube search is temporarily unavailable." });
+  }
+});
+
+app.post("/api/catalog/recommendations", verifySameOrigin, async (request, response) => {
+  try {
+    const currentTrack = recommendationSeeds([request.body?.currentTrack])[0] ?? null;
+    const likedTracks = recommendationSeeds(request.body?.likedTracks);
+    const recentTracks = recommendationSeeds(request.body?.recentTracks);
+    const excludeIds = Array.isArray(request.body?.excludeIds)
+      ? request.body.excludeIds
+          .filter((id: unknown): id is string => typeof id === "string")
+          .slice(0, 100)
+          .map((id: string) => id.slice(0, 200))
+      : [];
+    const tracks = await getRecommendedYouTube({
+      currentTrack,
+      likedTracks,
+      recentTracks,
+      excludeIds,
+    });
+    response.setHeader("Cache-Control", "private, max-age=60");
+    response.json({ tracks: tracks.map(catalogTrack) });
+  } catch (error) {
+    console.error(
+      "Personalized recommendations failed:",
+      error instanceof Error ? error.name : "unknown error",
+    );
+    response.status(502).json({ error: "Personalized recommendations are temporarily unavailable." });
   }
 });
 
