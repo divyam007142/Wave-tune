@@ -9,6 +9,12 @@ import {
 import type { Playlist, Track } from "../src/types/music";
 import { requireAuth, sessionUserFrom, type SessionUser } from "./auth";
 import { getDatabase } from "./database";
+import {
+  buildTimeCapsuleStats,
+  dayKeyAt,
+  normalizeTimeZone,
+  type DailyListeningRecord,
+} from "./listeningStats";
 
 type Profile = {
   id: string;
@@ -377,7 +383,54 @@ router.post(
         $inc: { totalListeningSeconds: seconds },
       },
     );
+    const timeZone = normalizeTimeZone(request.body?.timeZone);
+    const dailyStats = (await getDatabase()).collection<DailyListeningRecord>("listening_stats");
+    await dailyStats.updateOne(
+      {
+        accountId: user.id,
+        day: dayKeyAt(now, timeZone),
+        trackId: track.id,
+      },
+      {
+        $set: { track, updatedAt: now },
+        $setOnInsert: { accountId: user.id, day: dayKeyAt(now, timeZone), trackId: track.id, createdAt: now },
+        $inc: { seconds, plays: seconds === 0 ? 1 : 0 },
+      },
+      { upsert: true },
+    );
     response.json({ ok: true });
+  }),
+);
+
+router.get(
+  "/time-capsule",
+  requireAuth,
+  asyncRoute(async (request, response) => {
+    const days = Number(request.query.days) === 7 ? 7 : 30;
+    const timeZone = normalizeTimeZone(request.query.timeZone);
+    const today = dayKeyAt(new Date(), timeZone);
+    const startDay = new Date(
+      Date.UTC(
+        Number(today.slice(0, 4)),
+        Number(today.slice(5, 7)) - 1,
+        Number(today.slice(8, 10)) - days + 1,
+      ),
+    ).toISOString().slice(0, 10);
+    const user = sessionUserFrom(response);
+    const document = await ensureUser(user);
+    const database = await getDatabase();
+    const records = await database
+      .collection<DailyListeningRecord>("listening_stats")
+      .find({ accountId: user.id, day: { $gte: startDay, $lte: today } })
+      .toArray();
+    response.setHeader("Cache-Control", "private, no-store");
+    response.json(buildTimeCapsuleStats({
+      records,
+      days,
+      timeZone,
+      today,
+      allTimeSeconds: document.totalListeningSeconds ?? 0,
+    }));
   }),
 );
 
