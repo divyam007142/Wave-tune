@@ -1,13 +1,16 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { createPortal } from "react-dom";
 import {
-  Activity, ArrowLeft, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3,
-  Heart, Home, Library, ListMusic, ListPlus, LogIn, LogOut, Menu, MoreHorizontal, Music2,
+  Activity, AlertCircle, ArrowLeft, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3,
+  Heart, Home, Info, Library, ListMusic, ListPlus, LogIn, LogOut, Menu, MoreHorizontal, Music2,
   Pause, Play, Plus, Radio, Search, Settings2, Shuffle, SkipBack, SkipForward, SlidersHorizontal,
   Trash2, UserRound, Volume2, VolumeX, X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Redirect, Route, Router, Switch, useLocation } from "wouter";
 import { AuthModal } from "./components/AuthModal";
+import { GuestLimitModal } from "./components/GuestLimitModal";
+import { InstallAppButton } from "./components/InstallAppButton";
 import { ListeningStats } from "./components/ListeningStats";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -15,6 +18,7 @@ import { usePlayer } from "./context/PlayerContext";
 import { PlayerProvider } from "./context/PlayerContext";
 import { accountService, type AccountSnapshot, type AppProfile } from "./services/account";
 import { catalogService } from "./services/catalog";
+import { recordListeningStreak, showWaveNotification } from "./services/notifications";
 import { readStored, writeStored } from "./services/storage";
 import type { Playlist, SearchResult, Track } from "./types/music";
 
@@ -82,15 +86,36 @@ function WaveLogo({ compact = false }: { compact?: boolean }) {
   return <div className={`logo-lockup ${compact ? "logo-compact" : ""}`} aria-label="Wave Tune"><span className="logo-mark"><i /><i /><i /><i /></span>{!compact && <span className="logo-wordmark">WAVE <b>TUNE</b></span>}</div>;
 }
 
-function IconButton({ label, onClick, children, active = false, className = "" }: { label: string; onClick?: () => void; children: ReactNode; active?: boolean; className?: string }) {
-  return <motion.button type="button" whileTap={{ scale: .92 }} className={`icon-button ${active ? "is-active" : ""} ${className}`} aria-label={label} title={label} onClick={onClick}>{children}</motion.button>;
+function IconButton({ label, onClick, children, active = false, className = "", ariaExpanded, ariaHasPopup }: { label: string; onClick?: () => void; children: ReactNode; active?: boolean; className?: string; ariaExpanded?: boolean; ariaHasPopup?: "menu" | "listbox" | "dialog" | "grid" | "tree" }) {
+  return <motion.button type="button" whileTap={{ scale: .92 }} className={`icon-button ${active ? "is-active" : ""} ${className}`} aria-label={label} aria-expanded={ariaExpanded} aria-haspopup={ariaHasPopup} title={label} onClick={onClick}>{children}</motion.button>;
 }
 
 function TrackRow({ track, index, context, onAddToPlaylist, onRemove, removeLabel = "Remove song" }: { track: Track; index?: number; context?: Track[]; onAddToPlaylist?: (track: Track) => void; onRemove?: (track: Track) => void; removeLabel?: string }) {
   const { currentTrack, isPlaying, requestTrack, togglePlay, likedIds, toggleLike, addToQueue, removeFromQueue, queue } = usePlayer();
   const active = currentTrack?.id === track.id;
   const queued = queue.some((item) => item.id === track.id);
-  return <motion.div layout className={`track-row ${active ? "is-current" : ""}`} whileHover={{ x: 2 }}>
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
+
+  return <motion.div layout className={`track-row ${onRemove ? "has-track-menu" : ""} ${active ? "is-current" : ""}`} whileHover={{ x: 2 }}>
     {index !== undefined && <span className="track-index">{active && isPlaying ? <span className="playing-bars"><i /><i /><i /></span> : String(index + 1).padStart(2, "0")}</span>}
     <button className="track-main" onClick={() => requestTrack(track, context)}><Artwork track={track} className="track-art" /><span className="track-copy"><strong>{track.title}</strong><span>{track.artist}</span></span></button>
     <span className="track-album">{track.album}</span>
@@ -99,7 +124,33 @@ function TrackRow({ track, index, context, onAddToPlaylist, onRemove, removeLabe
       <IconButton label={likedIds.includes(track.id) ? "Unlike song" : "Like song"} active={likedIds.includes(track.id)} onClick={() => toggleLike(track)}><Heart size={15} fill={likedIds.includes(track.id) ? "currentColor" : "none"} /></IconButton>
       {onAddToPlaylist && <IconButton label="Add to playlist" onClick={() => onAddToPlaylist(track)}><ListPlus size={15} /></IconButton>}
       <IconButton label={queued ? "Remove from queue" : "Add to queue"} onClick={() => queued ? removeFromQueue(track.id) : addToQueue(track)}>{queued ? <Check size={15} /> : <Plus size={15} />}</IconButton>
-      {onRemove && <IconButton label={removeLabel} onClick={() => onRemove(track)}><Trash2 size={15} /></IconButton>}
+      {onRemove && <div className="track-more" ref={menuRef}>
+        <IconButton
+          label={`More options for ${track.title}`}
+          className="track-more-trigger"
+          active={menuOpen}
+          ariaExpanded={menuOpen}
+          ariaHasPopup="menu"
+          onClick={() => setMenuOpen((open) => !open)}
+        >
+          <MoreHorizontal size={16} />
+        </IconButton>
+        <AnimatePresence>
+          {menuOpen && <motion.div
+            className="track-more-menu"
+            role="menu"
+            initial={{ opacity: 0, y: 5, scale: .97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 4, scale: .98 }}
+            transition={{ duration: .14 }}
+          >
+            <span className="track-more-label">SONG OPTIONS</span>
+            <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onRemove(track); }}>
+              <Trash2 size={14} /><span>{removeLabel}</span>
+            </button>
+          </motion.div>}
+        </AnimatePresence>
+      </div>}
     </span>
     <span className="track-duration">{track.duration ? formatTime(track.duration) : "—"}</span>
   </motion.div>;
@@ -130,8 +181,8 @@ function Sidebar({ activeView, onNavigate, collapsed, setCollapsed, profile, pla
 }
 
 function TopBar({ profile, onSearch, onSettings, onLogin, onMenu }: { profile?: AppProfile; onSearch: () => void; onSettings: () => void; onLogin: () => void; onMenu: () => void }) {
-  return <><header className="mobile-topbar"><button className="mobile-menu" onClick={onMenu} aria-label="Open menu"><Menu size={20} /></button><WaveLogo /><div className="topbar-actions"><IconButton label="Search" onClick={onSearch}><Search size={18} /></IconButton><NotificationCenter /><IconButton label="Settings" onClick={onSettings}><Settings2 size={18} /></IconButton></div></header>
-     <div className="desktop-toolbar"><div className="history-buttons"><IconButton label="Back" onClick={() => window.history.back()}><ArrowLeft size={17} /></IconButton><IconButton label="Forward" onClick={() => window.history.forward()}><ArrowRight size={17} /></IconButton></div><button className="toolbar-search" onClick={onSearch}><Search size={16} /><span>Search the catalog</span><kbd>⌘ K</kbd></button><div className="toolbar-spacer" /><NotificationCenter /><button className="toolbar-profile" onClick={profile ? onSettings : onLogin}><ProfileAvatar profile={profile} /><span>{profile?.nickname || profile?.name || "Log in"}</span><ChevronDown size={14} /></button></div></>;
+  return <><header className="mobile-topbar"><button className="mobile-menu" onClick={onMenu} aria-label="Open menu"><Menu size={20} /></button><WaveLogo /><div className="topbar-actions"><IconButton label="Search" onClick={onSearch}><Search size={18} /></IconButton><NotificationCenter isSignedIn={Boolean(profile)} /><InstallAppButton /><IconButton label="Settings" onClick={onSettings}><Settings2 size={18} /></IconButton></div></header>
+     <div className="desktop-toolbar"><div className="history-buttons"><IconButton label="Back" onClick={() => window.history.back()}><ArrowLeft size={17} /></IconButton><IconButton label="Forward" onClick={() => window.history.forward()}><ArrowRight size={17} /></IconButton></div><button className="toolbar-search" onClick={onSearch}><Search size={16} /><span>Search the catalog</span><kbd>⌘ K</kbd></button><div className="toolbar-spacer" /><InstallAppButton /><NotificationCenter isSignedIn={Boolean(profile)} /><button className="toolbar-profile" onClick={profile ? onSettings : onLogin}><ProfileAvatar profile={profile} /><span>{profile?.nickname || profile?.name || "Log in"}</span><ChevronDown size={14} /></button></div></>;
 }
 
 function HomeView({ tracks, recentTracks, loading, error, onRefresh, onNavigate, onAddToPlaylist }: { tracks: Track[]; recentTracks: Track[]; loading: boolean; error: string | null; onRefresh: () => void; onNavigate: (view: View) => void; onAddToPlaylist: (track: Track) => void }) {
@@ -430,12 +481,12 @@ function PlaylistPicker({ track, playlists, onClose, onAdded, onCreate }: { trac
   return <div className="modal-backdrop" onClick={onClose}><motion.div className="modal-card" initial={{ y: 12, opacity: 0 }} animate={{ y: 0, opacity: 1 }} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">SAVE SONG</span><h2>Add to playlist</h2></div><IconButton label="Close" onClick={onClose}><X size={18} /></IconButton></div><p className="modal-muted">{track.title}</p>{playlists.length ? playlists.map((playlist) => <button className="playlist-picker-row" key={playlist.id} disabled={saving !== null} onClick={() => void add(playlist)}><PlaylistArtwork playlist={playlist} /><span>{playlist.name}</span>{saving === playlist.id ? <span className="spinner" /> : <Plus size={15} />}</button>) : <div className="empty-inline">Create a playlist to save this song.</div>}{error && <p className="form-error">{error}</p>}<button className="secondary-button modal-create" onClick={onCreate}><Plus size={14} /> Create playlist</button></motion.div></div>;
 }
 
-function PlaylistDetailView({ playlist, onBack, onPlay, onDelete, onAddToPlaylist }: { playlist: Playlist; onBack: () => void; onPlay: () => void; onDelete: () => void; onAddToPlaylist: (track: Track) => void }) {
+function PlaylistDetailView({ playlist, onBack, onPlay, onDelete, onAddToPlaylist, onRemoveTrack }: { playlist: Playlist; onBack: () => void; onPlay: () => void; onDelete: () => void; onAddToPlaylist: (track: Track) => void; onRemoveTrack: (track: Track) => void }) {
   const tracks = playlist.tracks ?? [];
   return <div className="page playlist-page">
     <button className="back-button" onClick={onBack}><ArrowLeft size={15} /> All playlists</button>
     <section className="playlist-hero"><PlaylistArtwork playlist={playlist} /><div><span className="eyebrow">PLAYLIST</span><h1>{playlist.name}</h1><p>{playlist.description}</p><span className="playlist-meta">{tracks.length} songs · Curated by you</span><div className="playlist-actions">{tracks.length > 0 && <button className="main-play small" onClick={onPlay}><Play size={15} fill="currentColor" /> Play</button>}<button className="secondary-button" onClick={onDelete}><Trash2 size={14} /> Delete playlist</button></div></div></section>
-    {tracks.length ? <div className="track-list">{tracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={tracks} onAddToPlaylist={onAddToPlaylist} />)}</div> : <div className="empty-state compact-empty"><Radio size={23} /><h2>This playlist is ready for songs</h2><p>Save tracks from Discover or your home feed to fill it.</p></div>}
+    {tracks.length ? <div className="track-list">{tracks.map((track, index) => <TrackRow key={track.id} track={track} index={index} context={tracks} onAddToPlaylist={onAddToPlaylist} onRemove={onRemoveTrack} removeLabel="Remove from playlist" />)}</div> : <div className="empty-state compact-empty"><Radio size={23} /><h2>This playlist is ready for songs</h2><p>Save tracks from Discover or your home feed to fill it.</p></div>}
   </div>;
 }
 
@@ -477,7 +528,6 @@ function PlayerServices({ children }: { children: ReactNode }) {
   }, [isSignedIn]);
   return <PlayerProvider
     isAuthenticated={Boolean(!isLoading && isAuthenticated)}
-    onRequireAuth={() => setLocation("/sign-in")}
     onPlaybackEvent={savePlayback}
     onLikeEvent={saveLike}
   >{children}</PlayerProvider>;
@@ -497,10 +547,21 @@ function AuthenticatedApp() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [fullPlayerOpen, setFullPlayerOpen] = useState(false);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "info" } | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  const [guestLimitOpen, setGuestLimitOpen] = useState(false);
   const [addTrack, setAddTrack] = useState<Track | null>(null);
   const [createPlaylist, setCreatePlaylist] = useState(false);
   const notifiedTrackRef = useRef<string | null>(null);
+  const notify = useCallback((message: string, tone: "success" | "error" | "info" = "success") => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    setToast({ message, tone });
+    toastTimer.current = window.setTimeout(() => setToast(null), 4200);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+  }, []);
 
   const loadCatalog = useCallback(() => {
     setCatalogLoading(true);
@@ -520,14 +581,14 @@ function AuthenticatedApp() {
     }
     accountService.getSnapshot()
       .then(setAccount)
-      .catch((error) => setToast(error instanceof Error ? error.message : "Account storage is unavailable."));
-  }, [isLoading, isSignedIn]);
+      .catch((error) => notify(error instanceof Error ? error.message : "Account storage is unavailable.", "error"));
+  }, [isLoading, isSignedIn, notify]);
   useEffect(() => { void loadAccount(); }, [loadAccount]);
   useEffect(() => {
     const refresh = () => { void loadAccount(); };
     const showError = (event: Event) => {
       const message = (event as CustomEvent<string>).detail;
-      if (message) setToast(message);
+      if (message) notify(message, "error");
     };
     window.addEventListener("wave-tune:account-refresh", refresh);
     window.addEventListener("wave-tune:account-error", showError);
@@ -535,29 +596,41 @@ function AuthenticatedApp() {
       window.removeEventListener("wave-tune:account-refresh", refresh);
       window.removeEventListener("wave-tune:account-error", showError);
     };
-  }, [loadAccount]);
+  }, [loadAccount, notify]);
   useEffect(() => {
     if (isSignedIn && account) player.syncLikedIds(account.likedTracks.map((track) => track.id));
   }, [account, isSignedIn, player.syncLikedIds]);
   useEffect(() => {
-    if (player.playbackError) setToast(player.playbackError);
-  }, [player.playbackError]);
+    if (player.playbackError) notify(player.playbackError, "error");
+  }, [notify, player.playbackError]);
   useEffect(() => {
-    const track = player.currentTrack;
-    if (!track || notifiedTrackRef.current === track.id) return;
-    notifiedTrackRef.current = track.id;
-    if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
-    try {
-      if (localStorage.getItem("wave-tune:notifications") === "on") {
-        new Notification(`Now playing · ${track.title}`, {
-          body: track.artist,
-          icon: track.artwork || "/favicon.svg",
-        });
+    const onTrackStarted = (event: Event) => {
+      const track = (event as CustomEvent<Track>).detail;
+      if (!track?.id) return;
+
+      const streak = recordListeningStreak();
+      if (streak.startedToday) {
+        const title = streak.count === 1 ? "Your Wave Streak starts today" : `Wave Streak · day ${streak.count}`;
+        void showWaveNotification(title, "One song in. Keep your listening ritual going.", `wave-streak-${streak.day}`);
       }
-    } catch {
-      // Browser notification failures should not affect music playback.
-    }
-  }, [player.currentTrack]);
+      if (document.hidden && notifiedTrackRef.current !== track.id) {
+        notifiedTrackRef.current = track.id;
+        void showWaveNotification(
+          `Now playing · ${track.title}`,
+          `${track.artist}${track.album ? ` · ${track.album}` : ""}`,
+          "wave-now-playing",
+          track.artwork || "/favicon.svg",
+        );
+      }
+    };
+    const onGuestLimit = () => setGuestLimitOpen(true);
+    window.addEventListener("wave-tune:track-started", onTrackStarted);
+    window.addEventListener("wave-tune:guest-limit", onGuestLimit);
+    return () => {
+      window.removeEventListener("wave-tune:track-started", onTrackStarted);
+      window.removeEventListener("wave-tune:guest-limit", onGuestLimit);
+    };
+  }, []);
 
   const profile = account?.profile ?? (isSignedIn && user ? {
     id: user.id,
@@ -589,15 +662,15 @@ function AuthenticatedApp() {
       setAccount(null);
       setLocation("/");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Could not sign out.");
+      notify(error instanceof Error ? error.message : "Could not sign out.", "error");
     }
-  }, [isSignedIn, setLocation, signOut]);
+  }, [isSignedIn, notify, setLocation, signOut]);
   const authModalOpen = location.startsWith("/sign-in") || location.startsWith("/sign-up");
   const closeAuthModal = useCallback(() => setLocation("/"), [setLocation]);
   const finishAuth = useCallback(() => {
     setLocation("/");
-    setToast("You are signed in to Wave Tune.");
-  }, [setLocation]);
+    notify("You are signed in to Wave Tune.");
+  }, [notify, setLocation]);
   const saveProfile = async (nickname: string, image?: string) => {
     if (!isSignedIn) {
       login();
@@ -605,24 +678,40 @@ function AuthenticatedApp() {
     }
     await accountService.updateProfile(nickname, image);
     setAccount(await accountService.getSnapshot());
-    setToast("Your profile has been updated.");
+    notify("Your profile has been updated.");
   };
   const removeRecentTrack = async (track: Track) => {
     try {
       if (isSignedIn) await accountService.removeRecentTrack(track.id);
       player.removeRecentlyPlayed(track.id);
       if (isSignedIn) setAccount(await accountService.getSnapshot());
-      setToast(`Removed ${track.title} from your history.`);
+      notify(`Removed ${track.title} from your history.`);
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "This song could not be removed.");
+      notify(error instanceof Error ? error.message : "This song could not be removed.", "error");
     }
   };
   const removeLocalTrack = async (track: Track) => {
     try {
       await player.removeLocalTrack(track.id);
-      setToast(`Removed ${track.title} from this device.`);
+      notify(`Removed ${track.title} from this device.`);
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "This song could not be removed.");
+      notify(error instanceof Error ? error.message : "This song could not be removed.", "error");
+    }
+  };
+  const removePlaylistTrack = async (track: Track) => {
+    if (!selectedPlaylist) return;
+    try {
+      const result = await accountService.removeFromPlaylist(selectedPlaylist.id, track.id);
+      setSelectedPlaylist(result.playlist);
+      setAccount((current) => current ? {
+        ...current,
+        playlists: current.playlists.map((playlist) =>
+          playlist.id === result.playlist.id ? result.playlist : playlist,
+        ),
+      } : current);
+      notify(`Removed ${track.title} from ${result.playlist.name}.`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "This song could not be removed from the playlist.", "error");
     }
   };
   const addToPlaylist = (track: Track) => {
@@ -638,9 +727,9 @@ function AuthenticatedApp() {
       await accountService.deletePlaylist(selectedPlaylist.id);
       setSelectedPlaylist(null);
       void loadAccount();
-      setToast("Playlist deleted.");
+      notify("Playlist deleted.");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Could not delete this playlist.");
+      notify(error instanceof Error ? error.message : "Could not delete this playlist.", "error");
     }
   };
   useEffect(() => {
@@ -654,6 +743,7 @@ function AuthenticatedApp() {
         setMobileMenuOpen(false);
         setAddTrack(null);
         setCreatePlaylist(false);
+        setGuestLimitOpen(false);
       }
     };
     window.addEventListener("keydown", keyHandler);
@@ -707,6 +797,7 @@ function AuthenticatedApp() {
     onPlay={() => { const items = selectedPlaylist.tracks ?? []; if (items.length) player.requestTrack(items[0], items); }}
     onDelete={() => void deletePlaylist()}
     onAddToPlaylist={addToPlaylist}
+    onRemoveTrack={(track) => void removePlaylistTrack(track)}
   /> : page;
 
   return <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""} ${authModalOpen ? "auth-modal-open" : ""}`}>
@@ -721,11 +812,36 @@ function AuthenticatedApp() {
     <MobilePlayer onExpand={() => setFullPlayerOpen(true)} />
     <MobileNav activeView={activeView} onNavigate={navigate} />
     {mobileMenuOpen && <div className="mobile-drawer-backdrop" onClick={() => setMobileMenuOpen(false)}><div className="mobile-drawer" role="dialog" aria-modal="true" aria-label="Navigation menu" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><WaveLogo /><IconButton label="Close menu" onClick={() => setMobileMenuOpen(false)}><X size={18} /></IconButton></div><Sidebar activeView={activeView} onNavigate={navigate} collapsed={false} setCollapsed={() => undefined} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} /></div></div>}
-    {toast && <motion.div className="toast" initial={{ y: 18, opacity: 0 }} animate={{ y: 0, opacity: 1 }} onClick={() => setToast("")}><Check size={15} /> {toast}</motion.div>}
+    {createPortal(
+      <AnimatePresence>
+        {toast && <motion.aside
+          key={toast.message}
+          className={`toast toast-${toast.tone}`}
+          role={toast.tone === "error" ? "alert" : "status"}
+          aria-live={toast.tone === "error" ? "assertive" : "polite"}
+          aria-atomic="true"
+          initial={reduceMotion ? false : { opacity: 0, y: 18, scale: .96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={reduceMotion ? undefined : { opacity: 0, y: 10, scale: .98 }}
+          transition={{ type: "spring", stiffness: 420, damping: 32 }}
+        >
+          <span className="toast-symbol">{toast.tone === "error" ? <AlertCircle size={17} /> : toast.tone === "info" ? <Info size={17} /> : <Check size={17} />}</span>
+          <span className="toast-copy">{toast.message}</span>
+          <button type="button" className="toast-close" aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={15} /></button>
+          {!reduceMotion && <motion.span className="toast-timer" initial={{ scaleX: 1 }} animate={{ scaleX: 0 }} transition={{ duration: 4.2, ease: "linear" }} />}
+        </motion.aside>}
+      </AnimatePresence>,
+      document.body,
+    )}
+    <GuestLimitModal
+      open={guestLimitOpen}
+      onClose={() => setGuestLimitOpen(false)}
+      onLogin={() => { setGuestLimitOpen(false); login(); }}
+    />
     <AnimatePresence>
       {fullPlayerOpen && <FullPlayer onClose={() => setFullPlayerOpen(false)} />}
-      {addTrack && <PlaylistPicker track={addTrack} playlists={playlists} onClose={() => setAddTrack(null)} onAdded={(playlist) => { setSelectedPlaylist((current) => current?.id === playlist.id ? playlist : current); setAddTrack(null); void loadAccount(); setToast(`Added to ${playlist.name}.`); }} onCreate={() => { setAddTrack(null); setCreatePlaylist(true); }} />}
-      {createPlaylist && <CreatePlaylist onClose={() => setCreatePlaylist(false)} onCreated={(playlist) => { setCreatePlaylist(false); void loadAccount(); setToast(`${playlist.name} created.`); }} />}
+      {addTrack && <PlaylistPicker track={addTrack} playlists={playlists} onClose={() => setAddTrack(null)} onAdded={(playlist) => { setSelectedPlaylist((current) => current?.id === playlist.id ? playlist : current); setAddTrack(null); void loadAccount(); notify(`Added to ${playlist.name}.`); }} onCreate={() => { setAddTrack(null); setCreatePlaylist(true); }} />}
+      {createPlaylist && <CreatePlaylist onClose={() => setCreatePlaylist(false)} onCreated={(playlist) => { setCreatePlaylist(false); void loadAccount(); notify(`${playlist.name} created.`); }} />}
     </AnimatePresence>
     {authModalOpen && <AuthModal onClose={closeAuthModal} onSuccess={finishAuth} />}
   </div>;
