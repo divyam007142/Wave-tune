@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Bell, BellOff, Check, Music2, Waves, X } from "lucide-react";
 import {
@@ -26,14 +27,24 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
   );
   const [message, setMessage] = useState("");
   const [requesting, setRequesting] = useState(false);
+  const actionRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setOpen(false);
+        actionRef.current?.blur();
+      }
     };
     document.addEventListener("keydown", closeOnEscape);
-    return () => document.removeEventListener("keydown", closeOnEscape);
+    actionRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
   }, [open]);
 
   const enable = async () => {
@@ -51,7 +62,7 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
       setPermission(result);
       if (result === "granted") {
         setEnabled(true);
-        setMessage("Wave Streak notes are on. System player controls work separately wherever your device supports them.");
+        setMessage("Wave Streak notes are on. Your device’s media panel can show the song and playback controls where supported.");
         try {
           localStorage.setItem(notificationPreferenceKey, "on");
         } catch {
@@ -61,7 +72,7 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
         try {
           await showWaveNotification(
             "Wave Tune is ready",
-            "Your Wave Streak note will arrive after you start listening today.",
+            "Your next listening streak update will appear here.",
             "wave-tune-notification-test",
           );
         } catch {
@@ -103,18 +114,29 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
       <Bell size={17} />
       {!enabled && <span className="notification-indicator" />}
     </button>
-    <AnimatePresence>
-      {open && <div className="notification-overlay" onClick={() => setOpen(false)}>
-        <motion.section
-          className="notification-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="notification-title"
-          initial={reduceMotion ? false : { opacity: 0, y: 12, scale: .97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={reduceMotion ? undefined : { opacity: 0, y: 8, scale: .98 }}
-          onClick={(event) => event.stopPropagation()}
+    {createPortal(
+      <AnimatePresence>
+        {open && <motion.div
+          className="notification-overlay"
+          role="presentation"
+          initial={reduceMotion ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={reduceMotion ? undefined : { opacity: 0 }}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setOpen(false);
+          }}
         >
+          <motion.section
+            className="notification-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notification-title"
+            initial={reduceMotion ? false : { opacity: 0, y: 12, scale: .97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduceMotion ? undefined : { opacity: 0, y: 8, scale: .98 }}
+            transition={{ type: "spring", stiffness: 360, damping: 30 }}
+            onClick={(event) => event.stopPropagation()}
+          >
           <div className="notification-dialog-head">
             <span className="notification-dialog-icon">{enabled ? <Bell size={20} /> : <BellOff size={20} />}</span>
             <button type="button" className="notification-close" onClick={() => setOpen(false)} aria-label="Close notifications"><X size={17} /></button>
@@ -132,13 +154,15 @@ export function NotificationCenter({ isSignedIn }: { isSignedIn: boolean }) {
           </div>
           {message && <div className={`notification-message ${permission === "denied" || permission === "unsupported" ? "is-warning" : ""}`} role="status">{message}</div>}
           {enabled
-            ? <button type="button" className="notification-action secondary-button" onClick={disable}><BellOff size={15} /> Turn off notifications</button>
-            : <button type="button" className="notification-action primary-button" disabled={requesting || permission === "unsupported" || permission === "denied"} onClick={() => void enable()}>
+            ? <button ref={actionRef} type="button" className="notification-action secondary-button" onClick={disable}><BellOff size={15} /> Turn off notifications</button>
+            : <button ref={actionRef} type="button" className="notification-action primary-button" disabled={requesting || permission === "unsupported" || permission === "denied"} onClick={() => void enable()}>
               <Check size={15} /> {requesting ? "Waiting for permission…" : permission === "denied" ? "Blocked in browser settings" : "Allow notifications"}
             </button>}
-          <small className="notification-footnote">{isSignedIn ? "Your listening streak syncs with your account." : "Sign in to keep your listening streak in sync across devices."} Notes appear while Wave Tune is open or playing in a background tab; alerts after the browser is fully closed need push setup. Media controls vary by browser and device.</small>
-        </motion.section>
-      </div>}
-    </AnimatePresence>
+          <small className="notification-footnote">{isSignedIn ? "Your Wave Streak is recorded on this browser. Your profile and saved music are tied to your account." : "Your Wave Streak is recorded on this browser. Sign in to keep playlists and likes with your account."} Notes work while Wave Tune is open or playing in a background tab. Notifications after the browser fully closes need push setup. Media controls vary by browser and device.</small>
+          </motion.section>
+        </motion.div>}
+      </AnimatePresence>,
+      document.body,
+    )}
   </>;
 }
