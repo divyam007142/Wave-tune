@@ -52,6 +52,10 @@ export async function getDatabase(): Promise<Db> {
         const sessions = database.collection("auth_sessions");
         await sessions.createIndex({ tokenHash: 1 }, { unique: true });
         await sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+        await database.collection("listening_stats").createIndex(
+          { accountId: 1, day: 1, trackId: 1 },
+          { unique: true },
+        );
         retryDatabaseAfter = 0;
         return database;
       })
