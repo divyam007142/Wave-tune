@@ -1,8 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { createPortal } from "react-dom";
 import {
-  Activity, AlertCircle, ArrowLeft, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3,
-  Heart, Home, Info, Library, ListMusic, ListPlus, LogIn, LogOut, Menu, MoreHorizontal, Music2,
+  Activity, AlertCircle, ArrowLeft, ArrowRight, Bell, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3,
+  Heart, Headphones, Home, Info, Library, ListMusic, ListPlus, LogIn, LogOut, Menu, MoreHorizontal, Music2,
   Pause, Play, Plus, Radio, Search, Settings2, Shuffle, SkipBack, SkipForward, SlidersHorizontal,
   Trash2, UserRound, Volume2, VolumeX, X,
 } from "lucide-react";
@@ -13,17 +13,32 @@ import { GuestLimitModal } from "./components/GuestLimitModal";
 import { InstallAppButton } from "./components/InstallAppButton";
 import { ListeningStats } from "./components/ListeningStats";
 import { NotificationCenter } from "./components/NotificationCenter";
+import { NotificationsInbox } from "./components/NotificationsInbox";
+import { TimeCapsule } from "./components/TimeCapsule";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { usePlayer } from "./context/PlayerContext";
 import { PlayerProvider } from "./context/PlayerContext";
 import { accountService, type AccountSnapshot, type AppProfile } from "./services/account";
 import { catalogService } from "./services/catalog";
-import { recordListeningStreak, showWaveNotification } from "./services/notifications";
+import {
+  disableWavePushNotifications,
+  recordListeningStreak,
+  sendWavePushEvent,
+} from "./services/notifications";
 import { readStored, writeStored } from "./services/storage";
 import type { Playlist, SearchResult, Track } from "./types/music";
+import type { InboxNotification } from "./types/notifications";
 
-type View = "home" | "search" | "library" | "liked" | "recent" | "playlists" | "settings";
+type View = "home" | "search" | "library" | "liked" | "recent" | "playlists" | "capsule" | "notifications" | "settings";
+const validViews: View[] = ["home", "search", "library", "liked", "recent", "playlists", "capsule", "notifications", "settings"];
+
+function initialViewFromLocation(): View {
+  if (typeof window === "undefined") return "home";
+  const candidate = new URLSearchParams(window.location.search).get("view");
+  return candidate && validViews.includes(candidate as View) ? candidate as View : "home";
+}
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
+const inboxStorageKey = "wave-tune:inbox-notifications";
 
 function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return "0:00";
@@ -70,6 +85,12 @@ function Artwork({ track, className = "", priority = false }: { track?: Track | 
 
 function PlaylistArtwork({ playlist, className = "" }: { playlist: Playlist; className?: string }) {
   const track = playlist.tracks?.[0];
+  if (!track?.artwork && !playlist.artwork) {
+    return <div className={`artwork artwork-empty playlist-artwork-generated ${className}`} role="img" aria-label={`${playlist.name} playlist artwork`}>
+      <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 26v-4m6 10V16m6 17V14m6 23V11m6 24V15m6 18V18m6 10v-5" /></svg>
+      <span>WAVE TUNE</span>
+    </div>;
+  }
   return <Artwork track={track ?? { id: playlist.id, title: playlist.name, artist: "Wave Tune playlist", album: playlist.name, duration: 0, artwork: playlist.artwork, accent: playlist.accent, source: "catalog" }} className={className} />;
 }
 
@@ -83,7 +104,7 @@ function ProfileAvatar({ profile, large = false }: { profile?: Pick<AppProfile, 
 }
 
 function WaveLogo({ compact = false }: { compact?: boolean }) {
-  return <div className={`logo-lockup ${compact ? "logo-compact" : ""}`} aria-label="Wave Tune"><span className="logo-mark"><i /><i /><i /><i /></span>{!compact && <span className="logo-wordmark">WAVE <b>TUNE</b></span>}</div>;
+  return <div className={`logo-lockup ${compact ? "logo-compact" : ""}`} aria-label="Wave Tune"><span className="logo-mark"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 26v-4m6 10V16m6 17V14m6 23V11m6 24V15m6 18V18m6 10v-5" /></svg></span>{!compact && <span className="logo-wordmark">WAVE <b>TUNE</b></span>}</div>;
 }
 
 function IconButton({ label, onClick, children, active = false, className = "", ariaExpanded, ariaHasPopup }: { label: string; onClick?: () => void; children: ReactNode; active?: boolean; className?: string; ariaExpanded?: boolean; ariaHasPopup?: "menu" | "listbox" | "dialog" | "grid" | "tree" }) {
@@ -170,19 +191,21 @@ function SectionHeader({ eyebrow, title, action, onAction }: { eyebrow?: string;
   return <div className="section-header"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>{action && <button className="text-button" onClick={onAction}>{action}<ArrowRight size={14} /></button>}</div>;
 }
 
-function Sidebar({ activeView, onNavigate, collapsed, setCollapsed, profile, playlists, onLogin, onLogout }: { activeView: View; onNavigate: (view: View) => void; collapsed: boolean; setCollapsed: (value: boolean) => void; profile?: AppProfile; playlists: Playlist[]; onLogin: () => void; onLogout: () => void }) {
+function Sidebar({ activeView, onNavigate, collapsed, setCollapsed, profile, playlists, notificationCount, onLogin, onLogout }: { activeView: View; onNavigate: (view: View) => void; collapsed: boolean; setCollapsed: (value: boolean) => void; profile?: AppProfile; playlists: Playlist[]; notificationCount: number; onLogin: () => void; onLogout: () => void }) {
+  const recommendations = [{ id: "home" as View, label: "For you", icon: Home }, { id: "search" as View, label: "Discover", icon: Search }, { id: "library" as View, label: "Library", icon: Library }, { id: "recent" as View, label: "Recently played", icon: Clock3 }];
+  const myMusic = [{ id: "liked" as View, label: "Liked songs", icon: Heart }, { id: "playlists" as View, label: "Playlists", icon: ListMusic }, { id: "capsule" as View, label: "Sound Capsule", icon: Headphones }, { id: "notifications" as View, label: "Notifications", icon: Bell }, { id: "settings" as View, label: "Settings", icon: Settings2 }];
   return <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
-    <div className="sidebar-top"><WaveLogo compact={collapsed} /><span className="reference-brand">Wave Tune</span><IconButton label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => setCollapsed(!collapsed)}>{collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}</IconButton></div>
-    <nav className="sidebar-nav" aria-label="Primary navigation"><span className="nav-label">Recommend</span>{[{ id: "home" as View, label: "For you", icon: Home }, { id: "search" as View, label: "Discover", icon: Search }, { id: "library" as View, label: "Library", icon: Library }, { id: "recent" as View, label: "Recently played", icon: Clock3 }].map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? "is-active" : ""}`} onClick={() => onNavigate(id)} title={collapsed ? label : undefined}><Icon size={15} /><span>{label}</span></button>)}<span className="nav-label sidebar-sub-label">My music</span>{[{ id: "liked" as View, label: "Liked songs", icon: Heart }, { id: "playlists" as View, label: "Playlists", icon: ListMusic }, { id: "settings" as View, label: "Settings", icon: Settings2 }].map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? "is-active" : ""}`} onClick={() => onNavigate(id)}><Icon size={15} /><span>{label}</span></button>)}</nav>
+    <div className="sidebar-top"><WaveLogo compact={collapsed} /><IconButton label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={() => setCollapsed(!collapsed)}>{collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}</IconButton></div>
+    <nav className="sidebar-nav" aria-label="Primary navigation"><span className="nav-label">Recommend</span>{recommendations.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? "is-active" : ""}`} onClick={() => onNavigate(id)} title={collapsed ? label : undefined}><Icon size={15} /><span>{label}</span></button>)}<span className="nav-label sidebar-sub-label">My music</span>{myMusic.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? "is-active" : ""}`} onClick={() => onNavigate(id)} title={collapsed ? label : undefined}><Icon size={15} /><span>{label}</span>{id === "notifications" && notificationCount > 0 && <small className="nav-count">{notificationCount > 9 ? "9+" : notificationCount}</small>}</button>)}</nav>
     <div className="sidebar-playlists"><div className="sidebar-playlist-head"><span className="nav-label">Playlists</span><IconButton label="Open playlists" onClick={() => onNavigate("playlists")}><Plus size={16} /></IconButton></div>{playlists.slice(0, 3).map((playlist) => <button className="sidebar-playlist" key={playlist.id} onClick={() => onNavigate("playlists")}><span className="playlist-dot" style={{ backgroundImage: playlist.artwork ? `url(${playlist.artwork})` : undefined }} /><span>{playlist.name}</span></button>)}</div>
     <div className="sidebar-actions">{profile ? <button className="spotify-connect-button" onClick={onLogout}><LogOut size={15} /><span>Sign out</span></button> : <button className="spotify-connect-button" onClick={onLogin}><LogIn size={15} /><span>Log in</span></button>}</div>
     <div className="sidebar-footer"><ProfileAvatar profile={profile} /><span><strong>{profile?.nickname || profile?.name || "Guest listener"}</strong><small>{profile ? `${Math.round(profile.totalListeningSeconds / 60)} min listened` : "Five songs free"}</small></span><MoreHorizontal size={16} /></div>
   </aside>;
 }
 
-function TopBar({ profile, onSearch, onSettings, onLogin, onMenu }: { profile?: AppProfile; onSearch: () => void; onSettings: () => void; onLogin: () => void; onMenu: () => void }) {
-  return <><header className="mobile-topbar"><button className="mobile-menu" onClick={onMenu} aria-label="Open menu"><Menu size={20} /></button><WaveLogo /><div className="topbar-actions"><IconButton label="Search" onClick={onSearch}><Search size={18} /></IconButton><NotificationCenter isSignedIn={Boolean(profile)} /><InstallAppButton /><IconButton label="Settings" onClick={onSettings}><Settings2 size={18} /></IconButton></div></header>
-     <div className="desktop-toolbar"><div className="history-buttons"><IconButton label="Back" onClick={() => window.history.back()}><ArrowLeft size={17} /></IconButton><IconButton label="Forward" onClick={() => window.history.forward()}><ArrowRight size={17} /></IconButton></div><button className="toolbar-search" onClick={onSearch}><Search size={16} /><span>Search the catalog</span><kbd>⌘ K</kbd></button><div className="toolbar-spacer" /><InstallAppButton /><NotificationCenter isSignedIn={Boolean(profile)} /><button className="toolbar-profile" onClick={profile ? onSettings : onLogin}><ProfileAvatar profile={profile} /><span>{profile?.nickname || profile?.name || "Log in"}</span><ChevronDown size={14} /></button></div></>;
+function TopBar({ profile, onSearch, onSettings, onLogin, onMenu, onNotifications }: { profile?: AppProfile; onSearch: () => void; onSettings: () => void; onLogin: () => void; onMenu: () => void; onNotifications: (message?: string) => void }) {
+  return <><header className="mobile-topbar"><button className="mobile-menu" onClick={onMenu} aria-label="Open menu"><Menu size={20} /></button><WaveLogo /><div className="topbar-actions"><IconButton label="Search" onClick={onSearch}><Search size={18} /></IconButton><NotificationCenter isSignedIn={Boolean(profile)} onEnabled={onNotifications} onLogin={onLogin} /><InstallAppButton /><IconButton label="Settings" onClick={onSettings}><Settings2 size={18} /></IconButton></div></header>
+     <div className="desktop-toolbar"><div className="history-buttons"><IconButton label="Back" onClick={() => window.history.back()}><ArrowLeft size={17} /></IconButton><IconButton label="Forward" onClick={() => window.history.forward()}><ArrowRight size={17} /></IconButton></div><button className="toolbar-search" onClick={onSearch}><Search size={16} /><span>Search the catalog</span><kbd>⌘ K</kbd></button><div className="toolbar-spacer" /><InstallAppButton /><NotificationCenter isSignedIn={Boolean(profile)} onEnabled={onNotifications} onLogin={onLogin} /><button className="toolbar-profile" onClick={profile ? onSettings : onLogin}><ProfileAvatar profile={profile} /><span>{profile?.nickname || profile?.name || "Log in"}</span><ChevronDown size={14} /></button></div></>;
 }
 
 function HomeView({ tracks, recentTracks, loading, error, onRefresh, onNavigate, onAddToPlaylist }: { tracks: Track[]; recentTracks: Track[]; loading: boolean; error: string | null; onRefresh: () => void; onNavigate: (view: View) => void; onAddToPlaylist: (track: Track) => void }) {
@@ -530,7 +553,31 @@ function PlayerServices({ children }: { children: ReactNode }) {
     isAuthenticated={Boolean(!isLoading && isAuthenticated)}
     onPlaybackEvent={savePlayback}
     onLikeEvent={saveLike}
-  >{children}</PlayerProvider>;
+  ><PlayerRecommendationService />{children}</PlayerProvider>;
+}
+
+function PlayerRecommendationService() {
+  const player = usePlayer();
+  const provideRecommendations = useCallback(async (track: Track, excludeIds: string[]) => {
+    const knownTracks = new Map(
+      [...player.recentTrackHistory, ...player.library, track].map((item) => [item.id, item]),
+    );
+    const likedTracks = player.likedIds
+      .map((id) => knownTracks.get(id))
+      .filter((item): item is Track => Boolean(item));
+    const result = await catalogService.recommendations({
+      currentTrack: track,
+      likedTracks,
+      recentTracks: player.recentTrackHistory,
+      excludeIds,
+    });
+    return result.tracks;
+  }, [player.library, player.likedIds, player.recentTrackHistory]);
+  useEffect(() => {
+    player.setAutoplayRecommendationProvider(provideRecommendations);
+    return () => player.setAutoplayRecommendationProvider(null);
+  }, [player.setAutoplayRecommendationProvider, provideRecommendations]);
+  return null;
 }
 
 function AuthenticatedApp() {
@@ -542,17 +589,22 @@ function AuthenticatedApp() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<View>("home");
+  const [activeView, setActiveView] = useState<View>(initialViewFromLocation);
   const [selectedPlaylist, setSelectedPlaylist] = useState<Playlist | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [fullPlayerOpen, setFullPlayerOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" | "info" } | null>(null);
+  const [inboxNotifications, setInboxNotifications] = useState<InboxNotification[]>(() =>
+    readStored<InboxNotification[]>(inboxStorageKey, []),
+  );
+  const [bootSplashElapsed, setBootSplashElapsed] = useState(false);
+  const [loginTransitionLoading, setLoginTransitionLoading] = useState(false);
   const toastTimer = useRef<number | null>(null);
+  const loginSplashTimer = useRef<number | null>(null);
   const [guestLimitOpen, setGuestLimitOpen] = useState(false);
   const [addTrack, setAddTrack] = useState<Track | null>(null);
   const [createPlaylist, setCreatePlaylist] = useState(false);
-  const notifiedTrackRef = useRef<string | null>(null);
   const notify = useCallback((message: string, tone: "success" | "error" | "info" = "success") => {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     setToast({ message, tone });
@@ -561,6 +613,31 @@ function AuthenticatedApp() {
 
   useEffect(() => () => {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    if (loginSplashTimer.current !== null) window.clearTimeout(loginSplashTimer.current);
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setBootSplashElapsed(true), 560);
+    return () => window.clearTimeout(timer);
+  }, []);
+  useEffect(() => {
+    try {
+      writeStored(inboxStorageKey, inboxNotifications.slice(0, 50));
+    } catch {
+      // Keep the current inbox available for this visit if local storage is full.
+    }
+  }, [inboxNotifications]);
+  const addInboxNotification = useCallback((notification: Omit<InboxNotification, "id" | "createdAt" | "read">) => {
+    setInboxNotifications((current) => {
+      const latest = current[0];
+      if (latest?.type === notification.type && latest.title === notification.title
+        && Date.now() - new Date(latest.createdAt).getTime() < 30_000) return current;
+      return [{
+        ...notification,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: new Date().toISOString(),
+        read: false,
+      }, ...current].slice(0, 50);
+    });
   }, []);
 
   const loadCatalog = useCallback(() => {
@@ -608,19 +685,39 @@ function AuthenticatedApp() {
       const track = (event as CustomEvent<Track>).detail;
       if (!track?.id) return;
 
+      addInboxNotification({
+        type: "track",
+        title: `Now playing · ${track.title}`,
+        body: `${track.artist}${track.album ? ` · ${track.album}` : ""}`,
+        artwork: track.artwork || undefined,
+      });
       const streak = recordListeningStreak();
       if (streak.startedToday) {
         const title = streak.count === 1 ? "Your Wave Streak starts today" : `Wave Streak · day ${streak.count}`;
-        void showWaveNotification(title, "One song in. Keep your listening ritual going.", `wave-streak-${streak.day}`);
-      }
-      if (document.hidden && notifiedTrackRef.current !== track.id) {
-        notifiedTrackRef.current = track.id;
-        void showWaveNotification(
-          `Now playing · ${track.title}`,
-          `${track.artist}${track.album ? ` · ${track.album}` : ""}`,
-          "wave-now-playing",
-          track.artwork || "/favicon.svg",
-        );
+        const body = "Your listening streak has been recorded for today.";
+        addInboxNotification({
+          type: "streak",
+          title,
+          body,
+          artwork: track.artwork || undefined,
+        });
+        if (isSignedIn) {
+          void sendWavePushEvent({
+            type: "streak",
+            title,
+            body,
+            tag: "wave-streak",
+            artwork: track.artwork || undefined,
+          }).catch(() => undefined);
+        }
+      } else if (isSignedIn) {
+        void sendWavePushEvent({
+          type: "track",
+          title: `Now playing · ${track.title}`,
+          body: `${track.artist}${track.album ? ` · ${track.album}` : ""}`,
+          tag: "wave-now-playing",
+          artwork: track.artwork || undefined,
+        }).catch(() => undefined);
       }
     };
     const onGuestLimit = () => setGuestLimitOpen(true);
@@ -630,7 +727,7 @@ function AuthenticatedApp() {
       window.removeEventListener("wave-tune:track-started", onTrackStarted);
       window.removeEventListener("wave-tune:guest-limit", onGuestLimit);
     };
-  }, []);
+  }, [addInboxNotification, isSignedIn]);
 
   const profile = account?.profile ?? (isSignedIn && user ? {
     id: user.id,
@@ -653,11 +750,40 @@ function AuthenticatedApp() {
     setActiveView(view);
     setSelectedPlaylist(null);
     setMobileMenuOpen(false);
+    const url = new URL(window.location.href);
+    if (view === "home") url.searchParams.delete("view");
+    else url.searchParams.set("view", view);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    if (view === "notifications") {
+      setInboxNotifications((current) => current.map((notification) => ({ ...notification, read: true })));
+    }
   }, []);
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onServiceWorkerMessage = (event: MessageEvent) => {
+      const message = event.data;
+      if (message?.type === "wave-tune:open-notifications") {
+        navigate("notifications");
+        return;
+      }
+      const payload = message?.type === "wave-tune:push" ? message.payload : null;
+      if (!payload || !["track", "streak"].includes(payload.type)
+        || typeof payload.title !== "string" || typeof payload.body !== "string") return;
+      addInboxNotification({
+        type: payload.type as "track" | "streak",
+        title: payload.title,
+        body: payload.body,
+        artwork: typeof payload.artwork === "string" ? payload.artwork : undefined,
+      });
+    };
+    navigator.serviceWorker.addEventListener("message", onServiceWorkerMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onServiceWorkerMessage);
+  }, [addInboxNotification, navigate]);
   const login = useCallback(() => setLocation("/sign-in"), [setLocation]);
   const logout = useCallback(async () => {
     try {
       if (isSignedIn) await accountService.updatePresence(false).catch(() => undefined);
+      await disableWavePushNotifications().catch(() => undefined);
       await signOut();
       setAccount(null);
       setLocation("/");
@@ -668,6 +794,12 @@ function AuthenticatedApp() {
   const authModalOpen = location.startsWith("/sign-in") || location.startsWith("/sign-up");
   const closeAuthModal = useCallback(() => setLocation("/"), [setLocation]);
   const finishAuth = useCallback(() => {
+    setLoginTransitionLoading(true);
+    if (loginSplashTimer.current !== null) window.clearTimeout(loginSplashTimer.current);
+    loginSplashTimer.current = window.setTimeout(() => {
+      loginSplashTimer.current = null;
+      setLoginTransitionLoading(false);
+    }, 720);
     setLocation("/");
     notify("You are signed in to Wave Tune.");
   }, [notify, setLocation]);
@@ -786,6 +918,16 @@ function AuthenticatedApp() {
     case "playlists":
       page = <div className="page"><div className="page-heading split-heading"><div><span className="eyebrow">YOUR COLLECTION</span><h1>Playlists</h1><p>Make space for whatever the day calls for.</p></div><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={15} /> New playlist</button></div>{playlists.length ? <div className="playlist-grid">{playlists.map((playlist) => <motion.button key={playlist.id} className="playlist-card" whileHover={{ y: -4 }} onClick={() => setSelectedPlaylist(playlist)}><PlaylistArtwork playlist={playlist} /><span><strong>{playlist.name}</strong><small>{playlist.description}</small></span><ArrowRight size={15} /></motion.button>)}</div> : <div className="empty-state"><ListMusic size={24} /><h2>Create your first playlist</h2><p>Save live catalog tracks into a private MongoDB-backed collection.</p><button className="primary-button" onClick={() => isSignedIn ? setCreatePlaylist(true) : login()}><Plus size={14} /> New playlist</button></div>}</div>;
       break;
+    case "capsule":
+      page = <TimeCapsule isSignedIn={isSignedIn} onLogin={login} />;
+      break;
+    case "notifications":
+      page = <NotificationsInbox
+        notifications={inboxNotifications}
+        onMarkAllRead={() => setInboxNotifications((current) => current.map((notification) => ({ ...notification, read: true })))}
+        onClear={() => setInboxNotifications([])}
+      />;
+      break;
     case "settings":
       page = <SettingsView profile={profile} recentCount={recentTracks.length} playlistCount={playlists.length} onLogin={login} onLogout={logout} onViewHistory={() => navigate("recent")} onSaveProfile={saveProfile} />;
       break;
@@ -800,18 +942,23 @@ function AuthenticatedApp() {
     onRemoveTrack={(track) => void removePlaylistTrack(track)}
   /> : page;
 
+  const unreadCount = inboxNotifications.filter((notification) => !notification.read).length;
+  const showLoadingSplash = isLoading || !bootSplashElapsed || loginTransitionLoading;
   return <div className={`app-shell ${sidebarCollapsed ? "sidebar-is-collapsed" : ""} ${authModalOpen ? "auth-modal-open" : ""}`}>
     <div className="ambient ambient-one" /><div className="ambient ambient-two" />
-    <Sidebar activeView={activeView} onNavigate={navigate} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} />
+    <Sidebar activeView={activeView} onNavigate={navigate} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} profile={profile} playlists={playlists} notificationCount={unreadCount} onLogin={login} onLogout={logout} />
     <main className="main-column">
-      <TopBar profile={profile} onSearch={() => navigate("search")} onSettings={() => navigate("settings")} onLogin={login} onMenu={() => setMobileMenuOpen(true)} />
+      <TopBar profile={profile} onSearch={() => navigate("search")} onSettings={() => navigate("settings")} onLogin={login} onMenu={() => setMobileMenuOpen(true)} onNotifications={(message) => {
+        navigate("notifications");
+        if (message) notify(`In-app updates are available; background alerts need setup. ${message}`, "error");
+      }} />
       <AnimatePresence mode="wait" initial={!reduceMotion}><motion.div key={`${activeView}-${selectedPlaylist?.id ?? ""}`} className="view-shell" initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }} transition={{ duration: .24 }}>{activePage}</motion.div></AnimatePresence>
     </main>
     <ActivityRail recentTracks={recentTracks} isSignedIn={isSignedIn} onLogin={login} />
     <DesktopPlayer onExpand={() => setFullPlayerOpen(true)} />
     <MobilePlayer onExpand={() => setFullPlayerOpen(true)} />
     <MobileNav activeView={activeView} onNavigate={navigate} />
-    {mobileMenuOpen && <div className="mobile-drawer-backdrop" onClick={() => setMobileMenuOpen(false)}><div className="mobile-drawer" role="dialog" aria-modal="true" aria-label="Navigation menu" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><WaveLogo /><IconButton label="Close menu" onClick={() => setMobileMenuOpen(false)}><X size={18} /></IconButton></div><Sidebar activeView={activeView} onNavigate={navigate} collapsed={false} setCollapsed={() => undefined} profile={profile} playlists={playlists} onLogin={login} onLogout={logout} /></div></div>}
+    {mobileMenuOpen && <div className="mobile-drawer-backdrop" onClick={() => setMobileMenuOpen(false)}><div className="mobile-drawer" role="dialog" aria-modal="true" aria-label="Navigation menu" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><WaveLogo /><IconButton label="Close menu" onClick={() => setMobileMenuOpen(false)}><X size={18} /></IconButton></div><Sidebar activeView={activeView} onNavigate={navigate} collapsed={false} setCollapsed={() => undefined} profile={profile} playlists={playlists} notificationCount={unreadCount} onLogin={login} onLogout={logout} /></div></div>}
     {createPortal(
       <AnimatePresence>
         {toast && <motion.aside
@@ -844,6 +991,16 @@ function AuthenticatedApp() {
       {createPlaylist && <CreatePlaylist onClose={() => setCreatePlaylist(false)} onCreated={(playlist) => { setCreatePlaylist(false); void loadAccount(); notify(`${playlist.name} created.`); }} />}
     </AnimatePresence>
     {authModalOpen && <AuthModal onClose={closeAuthModal} onSuccess={finishAuth} />}
+    {showLoadingSplash && <LoadingSplash reducedMotion={Boolean(reduceMotion)} />}
+  </div>;
+}
+
+function LoadingSplash({ reducedMotion }: { reducedMotion: boolean }) {
+  return <div className={`boot-splash ${reducedMotion ? "is-reduced-motion" : ""}`} role="status" aria-live="polite">
+    <div className="boot-splash-mark"><WaveLogo compact /></div>
+    <strong>Wave Tune</strong>
+    <span>Getting your music ready</span>
+    <i className="boot-splash-wave" aria-hidden="true">{Array.from({ length: 15 }, (_, index) => <b key={index} />)}</i>
   </div>;
 }
 
