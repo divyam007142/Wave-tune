@@ -2,7 +2,7 @@ services:
   - type: web
     name: wave-tune
     runtime: node
-    rootDir: Wave-tune
+    rootDir: .
     buildCommand: npm ci && npm run build
     startCommand: npm run preview
     healthCheckPath: /api/health
@@ -12,10 +12,6 @@ services:
       - key: FRONTEND_ORIGIN
         sync: false
       - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: SPOTIFY_CLIENT_ID
-        sync: false
-      - key: SPOTIFY_CLIENT_SECRET
         sync: false
       - key: MONGODB_URI
         sync: false
