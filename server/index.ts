@@ -20,6 +20,53 @@ const app = express();
 const port = Number(process.env.PORT ?? 5000);
 app.set("trust proxy", true);
 
+function logYouTubeFailure(
+  operation: string,
+  error: unknown,
+  elapsedMs?: number,
+) {
+  const failure = error && typeof error === "object"
+    ? error as Error & {
+        code?: unknown;
+        exitCode?: unknown;
+        signalCode?: unknown;
+        stderr?: unknown;
+      }
+    : undefined;
+  const rawDetails =
+    (typeof failure?.stderr === "string" && failure.stderr) ||
+    failure?.message ||
+    (typeof error === "string" ? error : "");
+  const details = String(rawDetails)
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .replace(/https?:\/\/[^\s"'<>]+/g, (value) => {
+      try {
+        const url = new URL(value);
+        return `${url.origin}${url.pathname}[query redacted]`;
+      } catch {
+        return "[url redacted]";
+      }
+    })
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1_200);
+
+  console.error(`${operation} failed:`, {
+    ...(elapsedMs === undefined ? {} : { elapsedMs }),
+    errorName: failure?.name ?? typeof error,
+    ...(typeof failure?.code === "string" || typeof failure?.code === "number"
+      ? { code: failure.code }
+      : {}),
+    ...(typeof failure?.exitCode === "number" || failure?.exitCode === null
+      ? { exitCode: failure.exitCode }
+      : {}),
+    ...(typeof failure?.signalCode === "string" || failure?.signalCode === null
+      ? { signalCode: failure.signalCode }
+      : {}),
+    ...(details ? { details } : {}),
+  });
+}
+
 function catalogTrack(result: YouTubeResult): Track {
   return {
     id: result.videoId,
@@ -129,10 +176,7 @@ app.get("/api/catalog/trending", async (_request, response) => {
     const results = await getTrendingYouTube();
     response.json({ tracks: results.map(catalogTrack) });
   } catch (error) {
-    console.error(
-      "YouTube recommendations failed:",
-      error instanceof Error ? error.name : "unknown error",
-    );
+    logYouTubeFailure("YouTube recommendations", error);
     response
       .status(502)
       .json({ error: "YouTube recommendations are temporarily unavailable." });
@@ -153,10 +197,7 @@ app.get("/api/catalog/search", async (request, response) => {
     const tracks = (await searchCatalogYouTube(query)).map(catalogTrack);
     response.json({ tracks, albums: [], artists: [], playlists: [] });
   } catch (error) {
-    console.error(
-      "YouTube catalog search failed:",
-      error instanceof Error ? error.name : "unknown error",
-    );
+    logYouTubeFailure("YouTube catalog search", error);
     response
       .status(502)
       .json({ error: "YouTube search is temporarily unavailable." });
@@ -183,10 +224,7 @@ app.post("/api/catalog/recommendations", verifySameOrigin, async (request, respo
     response.setHeader("Cache-Control", "private, max-age=60");
     response.json({ tracks: tracks.map(catalogTrack) });
   } catch (error) {
-    console.error(
-      "Personalized recommendations failed:",
-      error instanceof Error ? error.name : "unknown error",
-    );
+    logYouTubeFailure("Personalized recommendations", error);
     response.status(502).json({ error: "Personalized recommendations are temporarily unavailable." });
   }
 });
@@ -209,10 +247,7 @@ app.get("/api/search", async (request, response) => {
     );
     response.json({ results: await searchYouTube(query) });
   } catch (error) {
-    console.error(
-      "YouTube search failed:",
-      error instanceof Error ? error.name : "unknown error",
-    );
+    logYouTubeFailure("YouTube search", error);
     response
       .status(502)
       .json({
@@ -228,14 +263,16 @@ app.get("/api/stream/:videoId", async (request, response) => {
     return;
   }
 
+  const startedAt = Date.now();
   try {
     const audioUrl = await getYouTubeStream(videoId);
     response.setHeader("Cache-Control", "private, max-age=60");
     response.json({ videoId, audioUrl, expiresIn: 240 });
   } catch (error) {
-    console.error(
-      "YouTube audio stream resolution failed:",
-      error instanceof Error ? error.name : "unknown error",
+    logYouTubeFailure(
+      "YouTube audio stream resolution",
+      error,
+      Date.now() - startedAt,
     );
     response
       .status(502)
@@ -256,10 +293,7 @@ app.get("/api/youtube/search", async (request, response) => {
   try {
     response.json({ results: await searchYouTube(query) });
   } catch (error) {
-    console.error(
-      "YouTube search failed:",
-      error instanceof Error ? error.name : "unknown error",
-    );
+    logYouTubeFailure("YouTube search", error);
     response.status(502).json({ error: "YouTube search is unavailable." });
   }
 });
