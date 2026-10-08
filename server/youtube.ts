@@ -19,7 +19,10 @@ type SearchEntry = {
   creator?: string;
   duration?: number;
   thumbnail?: string;
-  thumbnails?: { url?: string; preference?: number }[];
+  thumbnails?: {
+    url?: string;
+    preference?: number;
+  }[];
   webpage_url?: string;
   url?: string;
 };
@@ -39,14 +42,42 @@ export type RecommendationSeed = {
   id?: string;
 };
 
+
+/* -------------------------------------------------------------------------- */
+/*                                   CACHE                                    */
+/* -------------------------------------------------------------------------- */
+
 const SEARCH_TTL_MS = 5 * 60_000;
 const STREAM_TTL_MS = 4 * 60_000;
+const TRENDING_TTL_MS = 10 * 60_000;
 
-const searchCache = new Map<string, CacheEntry<YouTubeResult[]>>();
-const streamCache = new Map<string, CacheEntry<string>>();
+const searchCache = new Map<
+  string,
+  CacheEntry<YouTubeResult[]>
+>();
 
-const pendingSearches = new Map<string, Promise<YouTubeResult[]>>();
-const pendingStreams = new Map<string, Promise<string>>();
+const streamCache = new Map<
+  string,
+  CacheEntry<string>
+>();
+
+const trendingCache = new Map<
+  string,
+  CacheEntry<YouTubeResult[]>
+>();
+
+const pendingSearches = new Map<
+  string,
+  Promise<YouTubeResult[]>
+>();
+
+const pendingStreams = new Map<
+  string,
+  Promise<string>
+>();
+
+const pendingTrending =
+  new Map<string, Promise<YouTubeResult[]>>();
 
 const compilationTitle =
   /\b(?:playlist|jukebox|medley|compilation|full album|full movie|non[\s-]?stop|greatest hits|top\s+\d+\s+(?:songs|hits|tracks)|\d{2}s?\s+(?:songs|hits))\b/i;
@@ -59,7 +90,7 @@ const compilationTitle =
 function readCache<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
-) {
+): T | undefined {
   const entry = cache.get(key);
 
   if (!entry) {
@@ -79,9 +110,13 @@ function writeCache<T>(
   key: string,
   value: T,
   ttl: number,
-) {
+): void {
   if (cache.size >= 500) {
-    cache.delete(cache.keys().next().value!);
+    const firstKey = cache.keys().next().value;
+
+    if (firstKey) {
+      cache.delete(firstKey);
+    }
   }
 
   cache.set(key, {
@@ -95,14 +130,19 @@ function writeCache<T>(
 /*                              YOUTUBE HELPERS                               */
 /* -------------------------------------------------------------------------- */
 
-function validVideoId(value: string) {
+function validVideoId(value: string): boolean {
   return /^[\w-]{11}$/.test(value);
 }
 
-function thumbnailFrom(entry: SearchEntry) {
-  const thumbnails = [...(entry.thumbnails ?? [])].sort(
+function thumbnailFrom(
+  entry: SearchEntry,
+): string {
+  const thumbnails = [
+    ...(entry.thumbnails ?? []),
+  ].sort(
     (left, right) =>
-      (right.preference ?? 0) - (left.preference ?? 0),
+      (right.preference ?? 0) -
+      (left.preference ?? 0),
   );
 
   const candidate =
@@ -111,7 +151,8 @@ function thumbnailFrom(entry: SearchEntry) {
     "";
 
   try {
-    return new URL(candidate).protocol === "https:"
+    return new URL(candidate).protocol ===
+      "https:"
       ? candidate
       : "";
   } catch {
@@ -121,14 +162,18 @@ function thumbnailFrom(entry: SearchEntry) {
 
 
 /* -------------------------------------------------------------------------- */
-/*                              YOUTUBE SEARCH                                */
+/*                            YOUTUBE SEARCH                                  */
 /* -------------------------------------------------------------------------- */
 
 async function searchYouTubeUncached(
   query: string,
 ): Promise<YouTubeResult[]> {
+  /*
+   * Use fewer results per yt-dlp request.
+   * This reduces the amount of work required by Render.
+   */
   const payload = await ytdlp(
-    `ytsearch15:${query}`,
+    `ytsearch10:${query}`,
     {
       dumpSingleJson: true,
       flatPlaylist: true,
@@ -138,85 +183,110 @@ async function searchYouTubeUncached(
       quiet: true,
     },
     {
-      timeout: 25_000,
+      timeout: 15_000,
     },
   ) as unknown as SearchPayload;
 
-  return (payload.entries ?? []).flatMap((entry) => {
-    const videoId = entry.id?.trim() ?? "";
-    const title = entry.title?.trim().slice(0, 200) ?? "";
+  return (payload.entries ?? []).flatMap(
+    (entry) => {
+      const videoId =
+        entry.id?.trim() ?? "";
 
-    if (!validVideoId(videoId) || !title) {
-      return [];
-    }
-
-    const uploader = (
-      entry.artist ||
-      entry.uploader ||
-      entry.channel ||
-      entry.creator ||
-      "Unknown artist"
-    )
-      .trim()
-      .slice(0, 160);
-
-    const suppliedUrl =
-      entry.webpage_url ||
-      entry.url ||
-      `https://www.youtube.com/watch?v=${videoId}`;
-
-    let url =
-      `https://www.youtube.com/watch?v=${videoId}`;
-
-    try {
-      const parsed = new URL(suppliedUrl);
+      const title =
+        entry.title
+          ?.trim()
+          .slice(0, 200) ?? "";
 
       if (
-        parsed.protocol === "https:" &&
-        [
-          "youtube.com",
-          "www.youtube.com",
-          "music.youtube.com",
-          "youtu.be",
-        ].includes(parsed.hostname)
+        !validVideoId(videoId) ||
+        !title
       ) {
-        url = parsed.toString();
+        return [];
       }
-    } catch {
-      // Use the canonical YouTube URL.
-    }
 
-    return [
-      {
-        videoId,
-        title,
-        uploader,
-        artist: uploader,
-        url,
-        duration: Number.isFinite(entry.duration)
-          ? Math.max(0, Math.round(entry.duration!))
-          : 0,
-        thumbnail: thumbnailFrom(entry),
-      },
-    ];
-  });
+      const uploader = (
+        entry.artist ||
+        entry.uploader ||
+        entry.channel ||
+        entry.creator ||
+        "Unknown artist"
+      )
+        .trim()
+        .slice(0, 160);
+
+      const suppliedUrl =
+        entry.webpage_url ||
+        entry.url ||
+        `https://www.youtube.com/watch?v=${videoId}`;
+
+      let url =
+        `https://www.youtube.com/watch?v=${videoId}`;
+
+      try {
+        const parsed =
+          new URL(suppliedUrl);
+
+        if (
+          parsed.protocol === "https:" &&
+          [
+            "youtube.com",
+            "www.youtube.com",
+            "music.youtube.com",
+            "youtu.be",
+          ].includes(parsed.hostname)
+        ) {
+          url = parsed.toString();
+        }
+      } catch {
+        // Fall back to the canonical YouTube URL.
+      }
+
+      return [
+        {
+          videoId,
+          title,
+          uploader,
+          artist: uploader,
+          url,
+          duration:
+            Number.isFinite(
+              entry.duration,
+            )
+              ? Math.max(
+                  0,
+                  Math.round(
+                    entry.duration!,
+                  ),
+                )
+              : 0,
+          thumbnail:
+            thumbnailFrom(entry),
+        },
+      ];
+    },
+  );
 }
 
 
 /* -------------------------------------------------------------------------- */
-/*                           PUBLIC SEARCH FUNCTION                           */
+/*                         PUBLIC YOUTUBE SEARCH                              */
 /* -------------------------------------------------------------------------- */
 
 export async function searchYouTube(
   query: string,
 ): Promise<YouTubeResult[]> {
-  const normalizedQuery = query.trim().slice(0, 160);
+  const normalizedQuery =
+    query
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 160);
 
   if (!normalizedQuery) {
     return [];
   }
 
-  const cacheKey = normalizedQuery.toLocaleLowerCase();
+  const cacheKey =
+    normalizedQuery.toLocaleLowerCase();
 
   const cached = readCache(
     searchCache,
@@ -227,12 +297,14 @@ export async function searchYouTube(
     return cached;
   }
 
-  let pending = pendingSearches.get(cacheKey);
+  let pending =
+    pendingSearches.get(cacheKey);
 
   if (!pending) {
-    pending = searchYouTubeUncached(
-      normalizedQuery,
-    );
+    pending =
+      searchYouTubeUncached(
+        normalizedQuery,
+      );
 
     pendingSearches.set(
       cacheKey,
@@ -241,7 +313,8 @@ export async function searchYouTube(
   }
 
   try {
-    const results = await pending;
+    const results =
+      await pending;
 
     writeCache(
       searchCache,
@@ -253,79 +326,20 @@ export async function searchYouTube(
     return results;
   } finally {
     if (
-      pendingSearches.get(cacheKey) === pending
+      pendingSearches.get(
+        cacheKey,
+      ) === pending
     ) {
-      pendingSearches.delete(cacheKey);
-    }
-  }
-}
-
-
-/* -------------------------------------------------------------------------- */
-/*                     SEQUENTIAL MULTI-QUERY SEARCH                         */
-/* -------------------------------------------------------------------------- */
-
-/*
- * IMPORTANT:
- * We intentionally run YouTube searches one at a time.
- *
- * Previously the application used Promise.allSettled(), which could launch
- * 3 yt-dlp processes simultaneously on Render.
- *
- * Running them sequentially reduces:
- * - YouTube throttling
- * - Render CPU/memory spikes
- * - simultaneous yt-dlp processes
- * - random 502 errors
- */
-
-async function searchQueriesSequentially(
-  queries: string[],
-): Promise<{
-  results: YouTubeResult[];
-  firstError?: unknown;
-}> {
-  const results: YouTubeResult[] = [];
-  let firstError: unknown;
-
-  for (const query of queries) {
-    try {
-      const result = await searchYouTube(query);
-
-      if (result.length) {
-        results.push(...result);
-      }
-
-      /*
-       * Once we have enough results, don't keep making unnecessary
-       * YouTube requests.
-       */
-      if (results.length >= 15) {
-        break;
-      }
-    } catch (error) {
-      if (!firstError) {
-        firstError = error;
-      }
-
-      console.error(
-        `YouTube search failed for "${query}":`,
-        error instanceof Error
-          ? error.stack || error.message
-          : error,
+      pendingSearches.delete(
+        cacheKey,
       );
     }
   }
-
-  return {
-    results,
-    firstError,
-  };
 }
 
 
 /* -------------------------------------------------------------------------- */
-/*                           TRENDING FILTER                                  */
+/*                         RESULT FILTERING                                  */
 /* -------------------------------------------------------------------------- */
 
 export function selectTrendingSongs(
@@ -336,10 +350,14 @@ export function selectTrendingSongs(
   return results
     .filter((result) => {
       if (
-        !validVideoId(result.videoId) ||
+        !validVideoId(
+          result.videoId,
+        ) ||
         result.duration < 45 ||
         result.duration > 600 ||
-        compilationTitle.test(result.title) ||
+        compilationTitle.test(
+          result.title,
+        ) ||
         seen.has(result.videoId)
       ) {
         return false;
@@ -354,16 +372,17 @@ export function selectTrendingSongs(
 
 
 /* -------------------------------------------------------------------------- */
-/*                         CATALOG SEARCH QUERIES                             */
+/*                     CATALOG SEARCH QUERIES                                */
 /* -------------------------------------------------------------------------- */
 
 export function buildCatalogSearchQueries(
   query: string,
 ): string[] {
-  const normalized = query
-    .trim()
-    .replace(/\s+/g, " ")
-    .slice(0, 160);
+  const normalized =
+    query
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 160);
 
   if (!normalized) {
     return [];
@@ -397,8 +416,9 @@ export function buildCatalogSearchQueries(
   return [
     ...new Set([
       normalized,
-      ...variants.map((value) =>
-        value.slice(0, 160),
+      ...variants.map(
+        (value) =>
+          value.slice(0, 160),
       ),
     ]),
   ];
@@ -406,7 +426,7 @@ export function buildCatalogSearchQueries(
 
 
 /* -------------------------------------------------------------------------- */
-/*                           CATALOG SEARCH                                   */
+/*                     CATALOG SEARCH                                        */
 /* -------------------------------------------------------------------------- */
 
 export async function searchCatalogYouTube(
@@ -419,44 +439,76 @@ export async function searchCatalogYouTube(
     return [];
   }
 
-  /*
-   * FIX:
-   * Run the search variants sequentially instead of
-   * launching all yt-dlp processes simultaneously.
-   */
-  const {
-    results,
-    firstError,
-  } = await searchQueriesSequentially(
-    queries,
-  );
+  let firstError: unknown;
 
-  if (!results.length && firstError) {
+  /*
+   * IMPORTANT:
+   *
+   * Do NOT launch all queries simultaneously.
+   *
+   * First try the exact query.
+   * If it works, return immediately.
+   *
+   * Only use fallback queries when necessary.
+   */
+  for (const searchQuery of queries) {
+    try {
+      const results =
+        await searchYouTube(
+          searchQuery,
+        );
+
+      if (results.length > 0) {
+        const seen =
+          new Set<string>();
+
+        return results
+          .filter((result) => {
+            if (
+              !validVideoId(
+                result.videoId,
+              ) ||
+              !result.title.trim() ||
+              seen.has(
+                result.videoId,
+              )
+            ) {
+              return false;
+            }
+
+            seen.add(
+              result.videoId,
+            );
+
+            return true;
+          })
+          .slice(0, 30);
+      }
+    } catch (error) {
+      if (!firstError) {
+        firstError = error;
+      }
+
+      console.error(
+        `YouTube search failed for "${searchQuery}":`,
+        error instanceof Error
+          ? error.stack ||
+            error.message
+          : error,
+      );
+    }
+  }
+
+  if (firstError) {
     throw firstError;
   }
 
-  const seen = new Set<string>();
-
-  return results
-    .filter((result) => {
-      if (
-        !validVideoId(result.videoId) ||
-        !result.title.trim() ||
-        seen.has(result.videoId)
-      ) {
-        return false;
-      }
-
-      seen.add(result.videoId);
-
-      return true;
-    })
-    .slice(0, 30);
+  return [];
 }
 
 
 /* -------------------------------------------------------------------------- */
-/*                         RECOMMENDATION QUERIES                             */
+/*                     RECOMMENDATION QUERIES                                */
 /* -------------------------------------------------------------------------- */
 
 export function buildRecommendationQueries({
@@ -480,9 +532,10 @@ export function buildRecommendationQueries({
     seed: RecommendationSeed,
     score: number,
   ) => {
-    const name = seed.artist
-      .trim()
-      .slice(0, 100);
+    const name =
+      seed.artist
+        .trim()
+        .slice(0, 100);
 
     if (
       !name ||
@@ -507,19 +560,24 @@ export function buildRecommendationQueries({
   };
 
   for (
-    const track of likedTracks ?? []
+    const track of
+      likedTracks ?? []
   ) {
     addArtist(track, 3);
   }
 
   for (
-    const track of recentTracks ?? []
+    const track of
+      recentTracks ?? []
   ) {
     addArtist(track, 1);
   }
 
   if (currentTrack) {
-    addArtist(currentTrack, 4);
+    addArtist(
+      currentTrack,
+      4,
+    );
   }
 
   const queries: string[] = [];
@@ -533,14 +591,14 @@ export function buildRecommendationQueries({
     );
   }
 
-  const topArtists = [
-    ...artists.values(),
-  ]
-    .sort(
-      (left, right) =>
-        right.score - left.score,
-    )
-    .slice(0, 2);
+  const topArtists =
+    [...artists.values()]
+      .sort(
+        (left, right) =>
+          right.score -
+          left.score,
+      )
+      .slice(0, 2);
 
   for (
     const artist of topArtists
@@ -571,10 +629,11 @@ export function buildRecommendationQueries({
 
   return [
     ...new Set(
-      queries.map((query) =>
-        query
-          .trim()
-          .slice(0, 160),
+      queries.map(
+        (query) =>
+          query
+            .trim()
+            .slice(0, 160),
       ),
     ),
   ].slice(0, 3);
@@ -582,7 +641,7 @@ export function buildRecommendationQueries({
 
 
 /* -------------------------------------------------------------------------- */
-/*                           RECOMMENDATIONS                                  */
+/*                         RECOMMENDATIONS                                   */
 /* -------------------------------------------------------------------------- */
 
 export async function getRecommendedYouTube({
@@ -607,29 +666,58 @@ export async function getRecommendedYouTube({
     return getTrendingYouTube();
   }
 
+  const results: YouTubeResult[] =
+    [];
+
   /*
-   * FIX:
-   * Recommendations also use sequential YouTube searches.
+   * Search recommendations one at a time.
+   * Stop as soon as we have enough data.
    */
-  const {
-    results,
-  } = await searchQueriesSequentially(
-    queries,
-  );
+  for (const query of queries) {
+    try {
+      const found =
+        await searchYouTube(query);
+
+      results.push(...found);
+
+      const usable =
+        selectTrendingSongs(
+          results,
+        );
+
+      if (usable.length >= 10) {
+        break;
+      }
+    } catch (error) {
+      console.error(
+        `Recommendation search failed for "${query}":`,
+        error instanceof Error
+          ? error.stack ||
+            error.message
+          : error,
+      );
+    }
+  }
 
   const excluded =
     new Set(excludeIds);
 
   let recommendations =
-    selectTrendingSongs(results)
-      .filter(
-        (track) =>
-          !excluded.has(
-            track.videoId,
-          ),
-      );
+    selectTrendingSongs(
+      results,
+    ).filter(
+      (track) =>
+        !excluded.has(
+          track.videoId,
+        ),
+    );
 
-  if (recommendations.length < 8) {
+  /*
+   * Only request trending as a fallback.
+   */
+  if (
+    recommendations.length < 8
+  ) {
     try {
       const trending =
         await getTrendingYouTube();
@@ -646,13 +734,12 @@ export async function getRecommendedYouTube({
         );
     } catch (error) {
       console.error(
-        "YouTube recommendation fallback failed:",
+        "Recommendation trending fallback failed:",
         error instanceof Error
-          ? error.stack || error.message
+          ? error.stack ||
+            error.message
           : error,
       );
-
-      // Keep personalized recommendations.
     }
   }
 
@@ -664,75 +751,138 @@ export async function getRecommendedYouTube({
 
 
 /* -------------------------------------------------------------------------- */
-/*                              TRENDING                                      */
+/*                              TRENDING                                     */
 /* -------------------------------------------------------------------------- */
+
+async function getTrendingUncached(): Promise<
+  YouTubeResult[]
+> {
+  /*
+   * IMPORTANT:
+   *
+   * Only ONE YouTube request is made for trending.
+   *
+   * The previous implementation made three requests:
+   *   - trending songs
+   *   - new songs
+   *   - trending Indian songs
+   *
+   * That made the home page unnecessarily slow.
+   */
+  try {
+    const results =
+      await searchYouTube(
+        "trending songs official music video",
+      );
+
+    return selectTrendingSongs(
+      results,
+    );
+  } catch (error) {
+    console.error(
+      "Trending YouTube search failed:",
+      error instanceof Error
+        ? error.stack ||
+          error.message
+        : error,
+    );
+
+    throw error;
+  }
+}
 
 export async function getTrendingYouTube(): Promise<
   YouTubeResult[]
 > {
-  const year =
-    new Date().getUTCFullYear();
+  const cacheKey = "trending";
 
-  /*
-   * FIX:
-   * Previously all 3 yt-dlp searches were launched
-   * simultaneously.
-   *
-   * Now they run sequentially and stop once enough
-   * results have been collected.
-   */
-  const {
-    results,
-    firstError,
-  } =
-    await searchQueriesSequentially([
-      "trending songs official music video",
-      `new songs official music video ${year}`,
-      "trending Indian songs official music video",
-    ]);
+  const cached =
+    readCache(
+      trendingCache,
+      cacheKey,
+    );
 
-  if (!results.length && firstError) {
-    throw firstError;
+  if (cached) {
+    return cached;
   }
 
-  return selectTrendingSongs(
-    results,
-  );
+  let pending =
+    pendingTrending.get(
+      cacheKey,
+    );
+
+  if (!pending) {
+    pending =
+      getTrendingUncached();
+
+    pendingTrending.set(
+      cacheKey,
+      pending,
+    );
+  }
+
+  try {
+    const results =
+      await pending;
+
+    writeCache(
+      trendingCache,
+      cacheKey,
+      results,
+      TRENDING_TTL_MS,
+    );
+
+    return results;
+  } finally {
+    if (
+      pendingTrending.get(
+        cacheKey,
+      ) === pending
+    ) {
+      pendingTrending.delete(
+        cacheKey,
+      );
+    }
+  }
 }
 
 
 /* -------------------------------------------------------------------------- */
-/*                            AUDIO STREAM                                    */
+/*                         AUDIO STREAM                                      */
 /* -------------------------------------------------------------------------- */
 
 async function resolveStreamUncached(
   videoId: string,
 ): Promise<string> {
   try {
-    const output = await ytdlp(
-      `https://www.youtube.com/watch?v=${videoId}`,
-      {
-        format: "bestaudio/best",
-        getUrl: true,
-        noPlaylist: true,
-        noWarnings: true,
-        noProgress: true,
-        quiet: true,
-      },
-      {
-        timeout: 25_000,
-      },
-    ) as unknown as string;
+    const output =
+      await ytdlp(
+        `https://www.youtube.com/watch?v=${videoId}`,
+        {
+          format:
+            "bestaudio/best",
+          getUrl: true,
+          noPlaylist: true,
+          noWarnings: true,
+          noProgress: true,
+          quiet: true,
+        },
+        {
+          timeout: 25_000,
+        },
+      ) as unknown as string;
 
     const streamUrl =
       output
         .trim()
-        .split(/\r?\n/)[0] ?? "";
+        .split(/\r?\n/)[0] ??
+      "";
 
     let parsed: URL;
 
     try {
-      parsed = new URL(streamUrl);
+      parsed =
+        new URL(streamUrl);
     } catch {
       throw new Error(
         "yt-dlp did not return a usable audio stream.",
@@ -740,7 +890,8 @@ async function resolveStreamUncached(
     }
 
     if (
-      parsed.protocol !== "https:" ||
+      parsed.protocol !==
+        "https:" ||
       !parsed.hostname.endsWith(
         ".googlevideo.com",
       )
@@ -755,7 +906,8 @@ async function resolveStreamUncached(
     console.error(
       `YouTube audio stream resolution failed for ${videoId}:`,
       error instanceof Error
-        ? error.stack || error.message
+        ? error.stack ||
+          error.message
         : error,
     );
 
@@ -765,13 +917,15 @@ async function resolveStreamUncached(
 
 
 /* -------------------------------------------------------------------------- */
-/*                         PUBLIC STREAM FUNCTION                             */
+/*                       PUBLIC STREAM FUNCTION                              */
 /* -------------------------------------------------------------------------- */
 
 export async function getYouTubeStream(
   videoId: string,
 ): Promise<string> {
-  if (!validVideoId(videoId)) {
+  if (
+    !validVideoId(videoId)
+  ) {
     throw new Error(
       "That YouTube video ID is invalid.",
     );
