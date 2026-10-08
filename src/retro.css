@@ -1418,3 +1418,23 @@ body { font-size: 14px; }
 @media (prefers-reduced-motion: reduce) {
   .capsule-skeleton-title, .capsule-skeleton-chart, .capsule-skeleton-metrics > i { animation: none; }
 }
+
+/* Updated Wave Tune mark: preserve the original colors on every surface. */
+.logo-mark {
+  overflow: hidden;
+  border-color: rgba(83, 78, 182, .28);
+  background: linear-gradient(135deg, rgba(255, 196, 60, .22), rgba(237, 82, 171, .17) 38%, rgba(82, 87, 233, .2) 70%, rgba(28, 211, 198, .22));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .28);
+}
+.logo-mark img { display: block; width: 88%; height: 88%; object-fit: contain; }
+.boot-splash {
+  background:
+    radial-gradient(ellipse at 50% 35%, rgba(128, 101, 222, .12), transparent 38%),
+    radial-gradient(ellipse at 50% 58%, rgba(22, 192, 188, .09), transparent 48%),
+    var(--paper);
+}
+.boot-splash-mark {
+  background: linear-gradient(135deg, rgba(255, 196, 60, .24), rgba(237, 82, 171, .18) 38%, rgba(82, 87, 233, .2) 70%, rgba(28, 211, 198, .22));
+}
+.install-guide-app-icon { background: #11152d; }
+.install-guide-app-icon img { object-fit: contain; }
