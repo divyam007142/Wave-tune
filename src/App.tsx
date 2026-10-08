@@ -104,7 +104,10 @@ function ProfileAvatar({ profile, large = false }: { profile?: Pick<AppProfile, 
 }
 
 function WaveLogo({ compact = false }: { compact?: boolean }) {
-  return <div className={`logo-lockup ${compact ? "logo-compact" : ""}`} aria-label="Wave Tune"><span className="logo-mark"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 26v-4m6 10V16m6 17V14m6 23V11m6 24V15m6 18V18m6 10v-5" /></svg></span>{!compact && <span className="logo-wordmark">WAVE <b>TUNE</b></span>}</div>;
+  return <div className={`logo-lockup ${compact ? "logo-compact" : ""}`} role="img" aria-label="Wave Tune">
+    <span className="logo-mark" aria-hidden="true"><img src="/wave-tune-logo.png" alt="" /></span>
+    {!compact && <span className="logo-wordmark">WAVE <b>TUNE</b></span>}
+  </div>;
 }
 
 function IconButton({ label, onClick, children, active = false, className = "", ariaExpanded, ariaHasPopup }: { label: string; onClick?: () => void; children: ReactNode; active?: boolean; className?: string; ariaExpanded?: boolean; ariaHasPopup?: "menu" | "listbox" | "dialog" | "grid" | "tree" }) {
