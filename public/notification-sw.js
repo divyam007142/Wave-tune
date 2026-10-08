@@ -1,7 +1,7 @@
-const SHELL_CACHE = "wave-tune-shell-v3";
+const SHELL_CACHE = "wave-tune-shell-v4";
 const APP_STATIC_ASSETS = [
   "/manifest.webmanifest",
-  "/favicon.svg",
+  "/wave-tune-logo.png",
   "/wave-tune-icon-192.png",
   "/wave-tune-icon-512.png",
 ];
