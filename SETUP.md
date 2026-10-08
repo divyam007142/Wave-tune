@@ -6,7 +6,7 @@
 - VS Code
 - The repository checked out locally
 
-Open the `Wave-tune` app folder in VS Code, then open **Terminal → New Terminal**. If you opened the Git checkout root instead, first run `cd Wave-tune`. Run the commands from the folder containing `package.json`.
+Open the repository root in VS Code—the folder containing `package.json`, `render.yaml`, and `functions/`—then open **Terminal → New Terminal**. If this app is nested inside a larger Git checkout, `cd` into the app folder before running commands.
 
 ## Install and configure
 
@@ -25,17 +25,16 @@ Edit `.env` on your machine. Do not commit it or paste private values into chat.
 | --- | --- | --- |
 | `MONGODB_URI` | For accounts and saved data | User accounts, sessions, profiles, likes, listening history, and playlists |
 | `GOOGLE_CLIENT_ID` | Only for Google sign-in | Public Google Identity Services client ID; the server uses it to verify sign-in tokens |
-| `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` | Yes for live music catalog | Spotify search, charts, track metadata, artwork, and album/artist/playlist data |
 | `FRONTEND_ORIGIN` | Usually no | Set to `http://localhost:5000` if testing a cross-origin request |
 
-Spotify credentials are used by the server only; never put `SPOTIFY_CLIENT_SECRET` in a `VITE_` variable or browser code. Spotify supplies the catalog and music metadata. YouTube search is used only to resolve a playable video after a track is selected, and audio plays in YouTube's embedded player. If the Spotify API is unavailable or credentials are missing, the catalog shows an error instead of substituting YouTube search results.
+The active catalog uses YouTube search and discovery. Spotify credentials are not needed. Tracks play through Wave Tune's YouTube-based playback service.
 
 Wave Tune uses Google Identity Services for account selection and verifies each signed identity token on the server. Configure Google once:
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), select or create a project and open **Google Auth Platform → Branding** to set the app name and support email.
 2. Open **Google Auth Platform → Clients → Create client**. Choose **Web application**.
 3. Add each site origin under **Authorized JavaScript origins**. For local development, add `http://localhost:5000`. For the hosted site, add its exact origin (scheme and host only, with no path). Add the origin users open to sign in from; do not put the API service URL here unless users visit that origin.
-4. Copy the Web application's **Client ID** (ending in `.apps.googleusercontent.com`) to `GOOGLE_CLIENT_ID` in `Wave-tune/.env`. For Replit or a hosted deployment, set the same `GOOGLE_CLIENT_ID` environment variable in that server's Secrets/environment settings instead.
+4. Copy the Web application's **Client ID** (ending in `.apps.googleusercontent.com`) to `GOOGLE_CLIENT_ID` in `.env`. For a hosted deployment, set the same variable in the API server's environment settings instead.
 5. Use the default `openid`, `email`, and `profile` identity scopes. This sign-in flow uses Google's popup credential callback, so it does **not** need a client secret or an authorized redirect URI. Do not create or add `GOOGLE_CLIENT_SECRET`.
 
 Only the Google ID, verified email, name, and HTTPS profile image are stored for the Google identity. Wave Tune stores user accounts and persistent sessions in MongoDB, matches returning users by Google account ID or verified email, and never receives or stores Google passwords. A MongoDB connection error does not stop catalog search or YouTube playback.
@@ -65,4 +64,4 @@ The build checks both client and server TypeScript before writing the frontend t
 - **The app shows an old screen:** make sure VS Code opened this repository’s root, then stop and restart the server.
 - **Account storage fails:** check the MongoDB URI, DNS resolution, and network/IP access list.
 - **Google sign-in fails:** confirm `GOOGLE_CLIENT_ID` is set on the server and the app origin is authorized in Google Cloud.
-- **API URLs return HTML instead of JSON in production:** check that Pages is rooted at `Wave-tune`, that its `functions/` directory was deployed, and that the Render origin is correct. See [DEPLOYMENT.md](DEPLOYMENT.md).
+- **API URLs return HTML instead of JSON in production:** check that Pages is rooted at `.`, that its `functions/` directory was deployed, and that the Render origin is correct. See [DEPLOYMENT.md](DEPLOYMENT.md).
