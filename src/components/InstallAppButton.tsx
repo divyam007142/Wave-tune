@@ -134,7 +134,7 @@ export function InstallAppButton() {
               <button ref={closeButtonRef} className="install-guide-close" type="button" onClick={() => setShowGuide(false)} aria-label="Close install instructions"><X size={17} /></button>
             </div>
             <div className="install-guide-brand">
-              <span className="install-guide-app-icon"><img src="/wave-tune-icon-192.png" alt="" /></span>
+              <span className="install-guide-app-icon"><img src="/wave-tune-icon-192.png" alt="" width={192} height={192} decoding="async" /></span>
               <span><strong>Wave Tune</strong><small>Music that moves with you</small></span>
               <span className="install-guide-live"><i /> {installPrompt ? "INSTALL AVAILABLE" : "INSTALL GUIDE"}</span>
             </div>
