@@ -3,20 +3,57 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#e8eadf" />
-    <meta name="description" content="Wave Tune — a calm place for your music." />
+    <meta name="theme-color" content="#eeeadd" />
+    <meta name="description" content="Find your next favorite song, build a personal library, and keep your music close with Wave Tune." />
     <meta name="application-name" content="Wave Tune" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Wave Tune" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <link rel="icon" href="/favicon.svg" />
+    <link rel="icon" type="image/png" href="/wave-tune-icon-192.png" />
     <link rel="apple-touch-icon" href="/wave-tune-icon-192.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>Wave Tune</title>
+    <style>
+      html, body, #root { min-height: 100%; margin: 0; }
+      body { min-height: 100svh; background: #eeeadd; }
+      .initial-splash {
+        position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 10px; color: #22251e;
+        background: radial-gradient(ellipse at 50% 38%, rgba(133, 107, 237, .13), transparent 34%),
+          radial-gradient(ellipse at 50% 55%, rgba(31, 198, 190, .09), transparent 48%), #eeeadd;
+        font: 12px/1.4 "DM Mono", ui-monospace, monospace;
+      }
+      .initial-splash-mark {
+        width: 64px; height: 64px; display: grid; place-items: center;
+        border: 1px solid rgba(34, 37, 30, .45);
+        background: linear-gradient(135deg, rgba(255, 198, 52, .2), rgba(237, 82, 171, .14) 38%, rgba(82, 87, 233, .17) 70%, rgba(28, 211, 198, .18));
+        box-shadow: 3px 3px 0 rgba(34, 37, 30, .12); animation: initial-splash-arrive .6s ease-out both;
+      }
+      .initial-splash-mark img { width: 42px; height: 42px; object-fit: contain; }
+      .initial-splash strong { font: 700 13px/1.2 "Space Mono", ui-monospace, monospace; letter-spacing: .08em; }
+      .initial-splash > span { color: #6c6c5d; font-size: 9px; }
+      .initial-splash-wave { height: 22px; display: flex; align-items: center; gap: 4px; margin-top: 5px; }
+      .initial-splash-wave b { width: 3px; height: 7px; background: linear-gradient(#fa7b69, #7354e8 65%, #20c8c3); transform-origin: center; animation: initial-splash-pulse .55s ease-in-out infinite alternate; }
+      .initial-splash-wave b:nth-child(3n) { height: 15px; animation-delay: -.2s; }
+      .initial-splash-wave b:nth-child(3n + 1) { height: 10px; animation-delay: -.4s; }
+      .initial-splash-wave b:nth-child(4n) { height: 19px; animation-delay: -.1s; }
+      @keyframes initial-splash-arrive { from { opacity: 0; transform: translateY(5px) scale(.95); } to { opacity: 1; transform: none; } }
+      @keyframes initial-splash-pulse { to { transform: scaleY(.45); } }
+      @media (prefers-reduced-motion: reduce) {
+        .initial-splash-mark, .initial-splash-wave b { animation: none; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="initial-splash" role="status" aria-live="polite">
+        <span class="initial-splash-mark"><img src="/wave-tune-logo.png" alt="" /></span>
+        <strong>Wave Tune</strong>
+        <span>Getting your music ready</span>
+        <span class="initial-splash-wave" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b></span>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
