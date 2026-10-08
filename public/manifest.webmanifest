@@ -2,13 +2,13 @@
   "id": "/",
   "name": "Wave Tune — Your daily soundtrack",
   "short_name": "Wave Tune",
-  "description": "Find your next favorite song, build a listening streak, and take your music anywhere.",
+  "description": "Discover music, build a personal library, and keep listening with Wave Tune.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#e8eadf",
-  "theme_color": "#e8eadf",
+  "background_color": "#eeeadd",
+  "theme_color": "#eeeadd",
   "categories": ["music", "entertainment"],
   "icons": [
     {
