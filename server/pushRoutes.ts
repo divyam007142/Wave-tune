@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type RequestHandler, type Resp
 import { requireAuth, sessionUserFrom } from "./auth";
 import {
   getWavePushPublicKey,
+  getWavePushConfigurationStatus,
   normalizeBrowserSubscription,
   removePushSubscription,
   savePushSubscription,
@@ -46,16 +47,40 @@ function appOrigin(request: Request) {
   }
 }
 
+function respondIfPushConfigurationMissing(response: Response) {
+  const status = getWavePushConfigurationStatus();
+  if (status.configured) return false;
+  response
+    .status(503)
+    .json({
+      configured: false,
+      missing: status.missing,
+      error: `Background alerts are not configured on this server. Add ${status.missing.join(" and ")} to the API server environment, then restart or redeploy it.`,
+    });
+  return true;
+}
+
+router.get("/status", (_request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  const status = getWavePushConfigurationStatus();
+  response.json(status);
+});
+
 router.get("/public-key", (_request, response) => {
+  if (respondIfPushConfigurationMissing(response)) return;
   try {
     response.setHeader("Cache-Control", "public, max-age=3600");
     response.json({ publicKey: getWavePushPublicKey() });
   } catch {
-    response.status(503).json({ error: "Background notifications are not configured on this server." });
+    response.status(503).json({
+      configured: false,
+      error: "Background alerts could not initialize. Check the server's SESSION_SECRET setting.",
+    });
   }
 });
 
 router.post("/subscriptions", requireAuth, asyncRoute(async (request, response) => {
+  if (respondIfPushConfigurationMissing(response)) return;
   const subscription = normalizeBrowserSubscription(request.body);
   if (!subscription) {
     response.status(400).json({ error: "The browser returned an invalid push subscription." });
@@ -71,6 +96,7 @@ router.post("/subscriptions", requireAuth, asyncRoute(async (request, response) 
 }));
 
 router.delete("/subscriptions", requireAuth, asyncRoute(async (request, response) => {
+  if (respondIfPushConfigurationMissing(response)) return;
   const endpoint = textValue(request.body?.endpoint, 4096);
   if (!endpoint) {
     response.status(400).json({ error: "A push subscription endpoint is required." });
@@ -81,6 +107,7 @@ router.delete("/subscriptions", requireAuth, asyncRoute(async (request, response
 }));
 
 router.post("/events", requireAuth, asyncRoute(async (request, response) => {
+  if (respondIfPushConfigurationMissing(response)) return;
   const type = request.body?.type === "streak" ? "streak" : request.body?.type === "track" ? "track" : null;
   const title = textValue(request.body?.title, 160);
   const body = textValue(request.body?.body, 260);
