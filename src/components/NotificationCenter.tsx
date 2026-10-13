@@ -6,6 +6,7 @@ import {
   notificationPreferenceKey,
   disableWavePushNotifications,
   enableWavePushNotifications,
+  getWavePushConfigurationStatus,
 } from "../services/notifications";
 
 function savedEnabled() {
@@ -35,7 +36,30 @@ export function NotificationCenter({ isSignedIn, onEnabled, onLogin }: { isSigne
   );
   const [message, setMessage] = useState("");
   const [requesting, setRequesting] = useState(false);
+  const [serverConfigured, setServerConfigured] = useState<boolean | null>(null);
+  const [missingServerSettings, setMissingServerSettings] = useState<string[]>([]);
   const actionRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    void getWavePushConfigurationStatus()
+      .then((status) => {
+        if (!active) return;
+        setServerConfigured(status.configured);
+        setMissingServerSettings(status.missing);
+        if (!status.configured) {
+          setMessage(`Background alerts need server setup. Missing server settings: ${status.missing.join(", ")}.`);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setServerConfigured(null);
+        setMissingServerSettings([]);
+        setMessage(error instanceof Error ? error.message : "Wave Tune could not check the background-alert server setup.");
+      });
+    return () => { active = false; };
+  }, [open]);
 
   useEffect(() => {
     if (!isSignedIn || permission !== "granted" || !savedEnabled()) {
@@ -179,15 +203,15 @@ export function NotificationCenter({ isSignedIn, onEnabled, onLogin }: { isSigne
           <p>Get Wave Tune alerts for new tracks and listening streaks, even when this app is closed. Your activity also appears in the Notifications tab.</p>
           <div className={`notification-permission-state state-${permission}`} aria-live="polite">
             <span className="permission-led" />
-            <span><strong>{!isSignedIn ? "Sign in to connect this device" : enabled ? "Background alerts are ready" : permission === "denied" ? "Notifications are blocked" : permission === "unsupported" ? "Not available in this browser" : "Notifications are off"}</strong><small>{!isSignedIn ? "In-app updates stay here; sign in to receive alerts while Wave Tune is closed." : enabled ? "This device is linked to your account for new-track and streak alerts." : permission === "denied" ? "Allow notifications for this site in browser settings." : permission === "unsupported" ? "This browser cannot receive push notifications." : "Your browser will ask before enabling notifications."}</small></span>
+            <span><strong>{serverConfigured === false ? "Background-alert server setup is incomplete" : !isSignedIn ? "Sign in to connect this device" : enabled ? "Background alerts are ready" : permission === "denied" ? "Notifications are blocked" : permission === "unsupported" ? "Not available in this browser" : "Notifications are off"}</strong><small>{serverConfigured === false ? `Add ${missingServerSettings.join(" and ")} to the API server environment, then restart or redeploy it.` : !isSignedIn ? "In-app updates stay here; sign in to receive alerts while Wave Tune is closed." : enabled ? "This device is linked to your account for new-track and streak alerts." : permission === "denied" ? "Allow notifications for this site in browser settings." : permission === "unsupported" ? "This browser cannot receive push notifications." : "Your browser will ask before enabling notifications."}</small></span>
           </div>
-          {message && <div className={`notification-message ${permission === "denied" || permission === "unsupported" ? "is-warning" : ""}`} role="status">{message}</div>}
+          {message && <div className={`notification-message ${permission === "denied" || permission === "unsupported" || serverConfigured === false ? "is-warning" : ""}`} role="status">{message}</div>}
           {enabled
             ? <button ref={actionRef} type="button" className="notification-action secondary-button" disabled={requesting} onClick={() => void disable()}><BellOff size={15} /> {requesting ? "Turning off…" : "Turn off notifications"}</button>
             : !isSignedIn
               ? <button ref={actionRef} type="button" className="notification-action primary-button" onClick={onLogin}><LogIn size={15} /> Sign in to enable alerts</button>
-              : <button ref={actionRef} type="button" className="notification-action primary-button" disabled={requesting || permission === "unsupported" || permission === "denied"} onClick={() => void enable()}>
-              <Check size={15} /> {requesting ? "Connecting this device…" : permission === "denied" ? "Blocked in browser settings" : "Allow background alerts"}
+              : <button ref={actionRef} type="button" className="notification-action primary-button" disabled={requesting || permission === "unsupported" || permission === "denied" || serverConfigured === false} onClick={() => void enable()}>
+              <Check size={15} /> {requesting ? "Connecting this device…" : serverConfigured === false ? "Server setup required" : permission === "denied" ? "Blocked in browser settings" : "Allow background alerts"}
             </button>}
           <small className="notification-footnote">{isSignedIn ? "Alerts are delivered by Wave Tune through your browser’s push service. You can disconnect this device at any time." : "Activity updates are saved on this device. Sign in to sync music and receive alerts when the app is closed."}</small>
           </motion.section>
