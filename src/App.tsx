@@ -12,6 +12,7 @@ import { AuthModal } from "./components/AuthModal";
 import { GuestLimitModal } from "./components/GuestLimitModal";
 import { InstallAppButton } from "./components/InstallAppButton";
 import { ListeningStats } from "./components/ListeningStats";
+import { MobileNowPlaying } from "./components/mobile-player/MobileNowPlaying";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { NotificationsInbox } from "./components/NotificationsInbox";
 import { TimeCapsule } from "./components/TimeCapsule";
@@ -953,7 +954,7 @@ function AuthenticatedApp() {
     <main className="main-column">
       <TopBar profile={profile} onSearch={() => navigate("search")} onSettings={() => navigate("settings")} onLogin={login} onMenu={() => setMobileMenuOpen(true)} onNotifications={(message) => {
         navigate("notifications");
-        if (message) notify(`In-app updates are available; background alerts need setup. ${message}`, "error");
+        if (message) notify(message, "error");
       }} />
       <AnimatePresence mode="wait" initial={!reduceMotion}><motion.div key={`${activeView}-${selectedPlaylist?.id ?? ""}`} className="view-shell" initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={reduceMotion ? undefined : { opacity: 0, y: -8 }} transition={{ duration: .24 }}>{activePage}</motion.div></AnimatePresence>
     </main>
@@ -989,7 +990,10 @@ function AuthenticatedApp() {
       onLogin={() => { setGuestLimitOpen(false); login(); }}
     />
     <AnimatePresence>
-      {fullPlayerOpen && <FullPlayer onClose={() => setFullPlayerOpen(false)} />}
+      {fullPlayerOpen && <>
+        <FullPlayer key="desktop-full-player" onClose={() => setFullPlayerOpen(false)} />
+        <MobileNowPlaying key="mobile-now-playing" onClose={() => setFullPlayerOpen(false)} />
+      </>}
       {addTrack && <PlaylistPicker track={addTrack} playlists={playlists} onClose={() => setAddTrack(null)} onAdded={(playlist) => { setSelectedPlaylist((current) => current?.id === playlist.id ? playlist : current); setAddTrack(null); void loadAccount(); notify(`Added to ${playlist.name}.`); }} onCreate={() => { setAddTrack(null); setCreatePlaylist(true); }} />}
       {createPlaylist && <CreatePlaylist onClose={() => setCreatePlaylist(false)} onCreated={(playlist) => { setCreatePlaylist(false); void loadAccount(); notify(`${playlist.name} created.`); }} />}
     </AnimatePresence>
