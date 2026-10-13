@@ -1,6 +1,6 @@
 import { createECDH, createHash, createHmac } from "node:crypto";
 import * as webPush from "web-push";
-import { getDatabase } from "./database";
+import { getDatabase, isMongoConfigured } from "./database";
 
 export type WavePushPayload = {
   type: "track" | "streak";
@@ -30,6 +30,13 @@ const subscriptionsCollection = "push_subscriptions";
 const maxSubscriptionsPerAccount = 12;
 const curveOrder = BigInt("0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551");
 let vapidKeys: { publicKey: string; privateKey: string } | undefined;
+
+export function getWavePushConfigurationStatus() {
+  const missing: string[] = [];
+  if (!process.env.SESSION_SECRET?.trim()) missing.push("SESSION_SECRET");
+  if (!isMongoConfigured()) missing.push("MONGODB_URI");
+  return { configured: missing.length === 0, missing };
+}
 
 function getVapidKeys() {
   if (vapidKeys) return vapidKeys;
