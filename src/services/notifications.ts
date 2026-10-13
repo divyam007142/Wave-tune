@@ -12,6 +12,29 @@ export type WavePushEvent = {
   artwork?: string;
 };
 
+export type WavePushConfigurationStatus = {
+  configured: boolean;
+  missing: string[];
+};
+
+export async function getWavePushConfigurationStatus(): Promise<WavePushConfigurationStatus> {
+  const response = await fetch("/api/push/status", { credentials: "same-origin" });
+  const payload = await response.json().catch(() => ({})) as {
+    configured?: unknown;
+    missing?: unknown;
+    error?: string;
+  };
+  if (!response.ok || typeof payload.configured !== "boolean") {
+    throw new Error(payload.error || "Wave Tune could not check the background-alert server setup.");
+  }
+  return {
+    configured: payload.configured,
+    missing: Array.isArray(payload.missing)
+      ? payload.missing.filter((name): name is string => typeof name === "string")
+      : [],
+  };
+}
+
 function localDayKey(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
