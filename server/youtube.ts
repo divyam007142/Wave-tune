@@ -1,4 +1,5 @@
 import ytdlp from "youtube-dl-exec";
+import play from "play-dl";
 
 export type YouTubeResult = {
   videoId: string;
@@ -18,6 +19,7 @@ type SearchEntry = {
   artist?: string;
   creator?: string;
   duration?: number;
+  durationInSec?: number;
   thumbnail?: string;
   thumbnails?: { url?: string; preference?: number }[];
   webpage_url?: string;
@@ -25,11 +27,14 @@ type SearchEntry = {
 };
 
 type SearchPayload = { entries?: SearchEntry[] };
-type CacheEntry<T> = { value: T; expiresAt: number };
+type CacheEntry<T> = { value: T; expiresAt: number; staleUntil: number };
 export type RecommendationSeed = { title: string; artist: string; id?: string };
 
 const SEARCH_TTL_MS = 5 * 60_000;
+const SEARCH_STALE_TTL_MS = 60 * 60_000;
 const STREAM_TTL_MS = 4 * 60_000;
+const YTDLP_SEARCH_TIMEOUT_MS = 15_000;
+const YTDLP_STREAM_TIMEOUT_MS = 12_000;
 const searchCache = new Map<string, CacheEntry<YouTubeResult[]>>();
 const streamCache = new Map<string, CacheEntry<string>>();
 const pendingSearches = new Map<string, Promise<YouTubeResult[]>>();
@@ -39,16 +44,30 @@ const compilationTitle = /\b(?:playlist|jukebox|medley|compilation|full album|fu
 function readCache<T>(cache: Map<string, CacheEntry<T>>, key: string) {
   const entry = cache.get(key);
   if (!entry) return undefined;
-  if (entry.expiresAt <= Date.now()) {
+  if (entry.staleUntil <= Date.now()) {
     cache.delete(key);
     return undefined;
   }
-  return entry.value;
+  return entry.expiresAt > Date.now() ? entry.value : undefined;
 }
 
-function writeCache<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttl: number) {
+function readStaleSearchCache(key: string) {
+  const entry = searchCache.get(key);
+  return entry && entry.expiresAt <= Date.now() && entry.staleUntil > Date.now()
+    ? entry.value
+    : undefined;
+}
+
+function writeCache<T>(
+  cache: Map<string, CacheEntry<T>>,
+  key: string,
+  value: T,
+  ttl: number,
+  staleTtl = ttl,
+) {
   if (cache.size >= 500) cache.delete(cache.keys().next().value!);
-  cache.set(key, { value, expiresAt: Date.now() + ttl });
+  const now = Date.now();
+  cache.set(key, { value, expiresAt: now + ttl, staleUntil: now + Math.max(ttl, staleTtl) });
 }
 
 function validVideoId(value: string) {
@@ -67,7 +86,53 @@ function thumbnailFrom(entry: SearchEntry) {
   }
 }
 
-async function searchYouTubeUncached(query: string): Promise<YouTubeResult[]> {
+function normalizeSearchEntry(entry: SearchEntry): YouTubeResult[] {
+  const videoId = entry.id?.trim() ?? "";
+  const title = entry.title?.trim().slice(0, 200) ?? "";
+  if (!validVideoId(videoId) || !title) return [];
+  const uploader = (entry.artist || entry.uploader || entry.channel || entry.creator || "Unknown artist")
+    .trim()
+    .slice(0, 160);
+  const suppliedUrl = entry.webpage_url || entry.url || `https://www.youtube.com/watch?v=${videoId}`;
+  let url = `https://www.youtube.com/watch?v=${videoId}`;
+  try {
+    const parsed = new URL(suppliedUrl);
+    if (parsed.protocol === "https:" && ["youtube.com", "www.youtube.com", "music.youtube.com", "youtu.be"].includes(parsed.hostname)) {
+      url = parsed.toString();
+    }
+  } catch {
+    // Use the canonical YouTube URL when a provider omits or mangles the link.
+  }
+  return [{
+    videoId,
+    title,
+    uploader,
+    artist: uploader,
+    url,
+    duration: Number.isFinite(entry.durationInSec)
+      ? Math.max(0, Math.round(entry.durationInSec!))
+      : Number.isFinite(entry.duration) ? Math.max(0, Math.round(entry.duration!)) : 0,
+    thumbnail: thumbnailFrom(entry),
+  }];
+}
+
+async function searchYouTubeWithPlayDl(query: string): Promise<YouTubeResult[]> {
+  const entries = await play.search(query, {
+    limit: 15,
+    source: { youtube: "video" },
+  });
+  return entries.flatMap((entry) => normalizeSearchEntry({
+    id: entry.id,
+    title: entry.title,
+    channel: entry.channel?.name,
+    durationInSec: entry.durationInSec,
+    thumbnail: entry.thumbnails?.at(-1)?.url,
+    thumbnails: entry.thumbnails,
+    url: entry.url,
+  }));
+}
+
+async function searchYouTubeWithYtDlp(query: string): Promise<YouTubeResult[]> {
   const payload = await ytdlp(`ytsearch15:${query}`, {
     dumpSingleJson: true,
     flatPlaylist: true,
@@ -75,35 +140,26 @@ async function searchYouTubeUncached(query: string): Promise<YouTubeResult[]> {
     noWarnings: true,
     noProgress: true,
     quiet: true,
-  }, { timeout: 25_000 }) as unknown as SearchPayload;
+  }, { timeout: YTDLP_SEARCH_TIMEOUT_MS }) as unknown as SearchPayload;
 
-  return (payload.entries ?? []).flatMap((entry) => {
-    const videoId = entry.id?.trim() ?? "";
-    const title = entry.title?.trim().slice(0, 200) ?? "";
-    if (!validVideoId(videoId) || !title) return [];
-    const uploader = (entry.artist || entry.uploader || entry.channel || entry.creator || "Unknown artist")
-      .trim()
-      .slice(0, 160);
-    const suppliedUrl = entry.webpage_url || entry.url || `https://www.youtube.com/watch?v=${videoId}`;
-    let url = `https://www.youtube.com/watch?v=${videoId}`;
+  return (payload.entries ?? []).flatMap(normalizeSearchEntry);
+}
+
+async function searchYouTubeUncached(query: string): Promise<YouTubeResult[]> {
+  try {
+    return await searchYouTubeWithPlayDl(query);
+  } catch (primaryError) {
     try {
-      const parsed = new URL(suppliedUrl);
-      if (parsed.protocol === "https:" && ["youtube.com", "www.youtube.com", "music.youtube.com", "youtu.be"].includes(parsed.hostname)) {
-        url = parsed.toString();
-      }
-    } catch {
-      // Use the canonical YouTube video URL when yt-dlp omits or mangles it.
+      const fallbackResults = await searchYouTubeWithYtDlp(query);
+      if (fallbackResults.length) return fallbackResults;
+    } catch (fallbackError) {
+      throw new AggregateError(
+        [primaryError, fallbackError],
+        "Both in-process and yt-dlp YouTube search providers failed.",
+      );
     }
-    return [{
-      videoId,
-      title,
-      uploader,
-      artist: uploader,
-      url,
-      duration: Number.isFinite(entry.duration) ? Math.max(0, Math.round(entry.duration!)) : 0,
-      thumbnail: thumbnailFrom(entry),
-    }];
-  });
+    throw primaryError;
+  }
 }
 
 export async function searchYouTube(query: string): Promise<YouTubeResult[]> {
@@ -112,6 +168,7 @@ export async function searchYouTube(query: string): Promise<YouTubeResult[]> {
   const cacheKey = normalizedQuery.toLocaleLowerCase();
   const cached = readCache(searchCache, cacheKey);
   if (cached) return cached;
+  const stale = readStaleSearchCache(cacheKey);
 
   let pending = pendingSearches.get(cacheKey);
   if (!pending) {
@@ -120,8 +177,11 @@ export async function searchYouTube(query: string): Promise<YouTubeResult[]> {
   }
   try {
     const results = await pending;
-    writeCache(searchCache, cacheKey, results, SEARCH_TTL_MS);
+    writeCache(searchCache, cacheKey, results, SEARCH_TTL_MS, SEARCH_STALE_TTL_MS);
     return results;
+  } catch (error) {
+    if (stale) return stale;
+    throw error;
   } finally {
     if (pendingSearches.get(cacheKey) === pending) pendingSearches.delete(cacheKey);
   }
@@ -158,11 +218,19 @@ export function buildCatalogSearchQueries(query: string): string[] {
 export async function searchCatalogYouTube(query: string): Promise<YouTubeResult[]> {
   const queries = buildCatalogSearchQueries(query);
   if (!queries.length) return [];
-  const settled = await Promise.allSettled(queries.map(searchYouTube));
-  const results = settled.flatMap((result) => result.status === "fulfilled" ? result.value : []);
-  if (!results.length) {
-    const failure = settled.find((result) => result.status === "rejected");
-    if (failure?.status === "rejected") throw failure.reason;
+  const results: YouTubeResult[] = [];
+  const failures: unknown[] = [];
+  for (const searchQuery of queries) {
+    try {
+      results.push(...await searchYouTube(searchQuery));
+    } catch (error) {
+      failures.push(error);
+      if (!results.length && searchQuery === queries[0]) continue;
+    }
+    if (results.length >= 15) break;
+  }
+  if (!results.length && failures.length) {
+    throw new AggregateError(failures, "All YouTube catalog search attempts failed.");
   }
   const seen = new Set<string>();
   return results.filter((result) => {
@@ -259,14 +327,29 @@ export async function getTrendingYouTube(): Promise<YouTubeResult[]> {
 }
 
 async function resolveStreamUncached(videoId: string): Promise<string> {
-  const output = await ytdlp(`https://www.youtube.com/watch?v=${videoId}`, {
-    format: "bestaudio/best",
-    getUrl: true,
-    noPlaylist: true,
-    noWarnings: true,
-    noProgress: true,
-    quiet: true,
-  }, { timeout: 25_000 }) as unknown as string;
+  let output = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      output = await ytdlp(`https://www.youtube.com/watch?v=${videoId}`, {
+        format: "bestaudio/best",
+        getUrl: true,
+        noPlaylist: true,
+        noWarnings: true,
+        noProgress: true,
+        quiet: true,
+      }, { timeout: YTDLP_STREAM_TIMEOUT_MS }) as unknown as string;
+      break;
+    } catch (error) {
+      const details = error && typeof error === "object"
+        ? error as { name?: string; message?: string; stderr?: string }
+        : {};
+      const failure = `${details.name ?? ""} ${details.message ?? ""} ${details.stderr ?? ""}`;
+      const retryable = details.name === "ChildProcessError"
+        || /timed?\s*out|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up|HTTP Error (?:429|5\d\d)/i.test(failure);
+      if (attempt > 0 || !retryable) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
 
   const streamUrl = output.trim().split(/\r?\n/)[0] ?? "";
   let parsed: URL;
