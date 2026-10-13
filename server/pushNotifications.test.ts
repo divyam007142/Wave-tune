@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   getWavePushPublicKey,
+  getWavePushConfigurationStatus,
   normalizeBrowserSubscription,
 } from "./pushNotifications";
 
@@ -17,6 +18,12 @@ test("Wave Tune creates a stable, browser-compatible VAPID public key", () => {
   const publicKey = getWavePushPublicKey();
   assert.match(publicKey, /^[A-Za-z0-9_-]{87}$/);
   assert.equal(getWavePushPublicKey(), publicKey);
+});
+
+test("push setup status reports only missing server variable names", () => {
+  const status = getWavePushConfigurationStatus();
+  assert.equal(status.configured, status.missing.length === 0);
+  assert.ok(status.missing.every((name) => name === "SESSION_SECRET" || name === "MONGODB_URI"));
 });
 
 test("push subscriptions accept supported HTTPS browser push endpoints", () => {
