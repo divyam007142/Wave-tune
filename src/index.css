@@ -854,7 +854,7 @@ button:focus-visible, input:focus-visible { outline-color: #caff5c; }
   .mobile-drawer .sidebar-playlist-head { display: flex; }
   .drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 0 18px 16px; }
   .toast { left: 16px; right: 16px; bottom: 143px; justify-content: center; text-align: center; }
-  .full-player-overlay { padding: 0; place-items: stretch; }
+  .full-player-overlay { display: none; }
   .full-player { width: 100%; max-height: 100%; border: 0; border-radius: 0; }
   .full-player-head { padding-top: max(14px, env(safe-area-inset-top)); }
   .full-player-body { padding: 8px 20px 31px; }
