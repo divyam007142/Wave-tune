@@ -178,7 +178,7 @@ app.get("/api/catalog/trending", async (_request, response) => {
   } catch (error) {
     logYouTubeFailure("YouTube recommendations", error);
     response
-      .status(502)
+      .status(503)
       .json({ error: "YouTube recommendations are temporarily unavailable." });
   }
 });
@@ -199,7 +199,7 @@ app.get("/api/catalog/search", async (request, response) => {
   } catch (error) {
     logYouTubeFailure("YouTube catalog search", error);
     response
-      .status(502)
+      .status(503)
       .json({ error: "YouTube search is temporarily unavailable." });
   }
 });
@@ -225,7 +225,7 @@ app.post("/api/catalog/recommendations", verifySameOrigin, async (request, respo
     response.json({ tracks: tracks.map(catalogTrack) });
   } catch (error) {
     logYouTubeFailure("Personalized recommendations", error);
-    response.status(502).json({ error: "Personalized recommendations are temporarily unavailable." });
+    response.status(503).json({ error: "Personalized recommendations are temporarily unavailable." });
   }
 });
 
@@ -249,7 +249,7 @@ app.get("/api/search", async (request, response) => {
   } catch (error) {
     logYouTubeFailure("YouTube search", error);
     response
-      .status(502)
+      .status(503)
       .json({
         error: "YouTube search is temporarily unavailable. Please try again.",
       });
@@ -275,7 +275,7 @@ app.get("/api/stream/:videoId", async (request, response) => {
       Date.now() - startedAt,
     );
     response
-      .status(502)
+      .status(503)
       .json({
         error:
           "This song's audio stream could not be prepared. Try another result.",
@@ -294,7 +294,7 @@ app.get("/api/youtube/search", async (request, response) => {
     response.json({ results: await searchYouTube(query) });
   } catch (error) {
     logYouTubeFailure("YouTube search", error);
-    response.status(502).json({ error: "YouTube search is unavailable." });
+    response.status(503).json({ error: "YouTube search is unavailable." });
   }
 });
 
